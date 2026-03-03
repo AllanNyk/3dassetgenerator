@@ -1,0 +1,6 @@
+numpy
+trimesh
+scipy
+gradio==6.4.0
+pydantic<2.12
+Pillow
