@@ -23,59 +23,73 @@ The app uses a **registry-based modular architecture**. The UI builds itself dyn
 4. Adding a new generator requires **zero changes to app.py** (unless it's a new file, then one import line)
 
 ### Key files
-- **`app.py`** (~200 lines) - Dynamic Gradio UI builder. Reads registry, builds tabs.
-- **`app_utils.py`** - Shared utilities: `save_mesh()`, `parse_color()`, `create_grid_and_axes()`
+- **`app.py`** (~230 lines) - Dynamic Gradio UI builder. Reads registry, builds tabs.
+- **`app_utils.py`** - `save_mesh()` (Z→Y-up conversion + GLB export), `parse_color()`, `create_grid_and_axes()`
 - **`core/registry.py`** - `Param`, `GeneratorInfo`, `register()`, `get_by_category()`
+- **`core/mesh.py`** - `MeshBuilder`, `combine_meshes()`, `apply_vertex_colors()`, `unweld_mesh()`, `compute_triplanar_uvs()`
+- **`core/noise.py`** - `PerlinNoise` (scalar + vectorized 2D), `noise_2d_grid()`, `fractal_noise()`
 - **`generators/*.py`** - Generator functions + registration metadata
 
 ## Current Features
 
-### Asset Types (24 generators)
+### Asset Types
 - **Rocks**: Single rocks, rock piles, boulders, pebbles
 - **Vegetation**: Trees (spherical/conical/layered), forests, bushes, stumps
-- **Buildings**: Buildings with roofs, villages, towers, walls, fences
+- **Buildings**: Buildings with roofs, villages, towers, walls, fences, outhouse, Danish farmhouse
 - **Terrain**: Heightmap terrain, islands, plateaus
-- **Props**: Crystals, crates, barrels, lamps, signs, benches, flower pots
+- **Props**: Crystals, crates, barrels, lamps, signs, benches, flower pots, candlesticks, books, clogs, brooms, kitchen stove, fireplace, chimney, washing basin
+- **Furniture**: Tables, chairs, wardrobes, beds, single beds, rocking chairs, cupboards, settle beds, chests, clothes racks, wall coat racks, plate racks, grandfather clocks
+- **Instruments**: Violin, trumpet
+- **Buildings (special)**: Childhood home
 
 ### UI Features
-- **Live preview**: Parameters update the 3D preview in real-time
+- **Live preview**: Parameters update the 3D preview in real-time via `.change()` handlers
 - **Vertex colors**: Color customization via color pickers
 - **Rotation controls**: X/Y/Z rotation sliders (baked into exported mesh)
 - **Grid & axes**: Toggle grid overlay with measurement markers and XYZ axes
 - **Separate download**: Preview shows grid, download file is clean (no grid)
 - **Seed control**: Set seed for reproducible generation
 
-### Export
-- **Format**: GLB (binary glTF)
-- **Coordinate system**: Y-up (Unity/Godot compatible). Generators use Z-up internally, converted on export.
+### Export Pipeline (`app_utils.save_mesh()`)
+1. Z-up → Y-up conversion: rotates mesh -90° around X axis
+2. Applies user rotation (X, Y, Z sliders)
+3. Exports clean GLB for download (no grid)
+4. If grid enabled: creates grid mesh, converts it to Y-up, concatenates with asset, exports preview GLB
+- **Format**: GLB (binary glTF), Y-up (Unity/Godot compatible)
 - **Colors**: Vertex colors embedded in mesh
 
 ### Textures
-- Procedural texture generation (stone, wood, grass)
+- Procedural texture generation with presets: Stone, White Stone, Wood, Grass, Thatch, Dark Thatch
+- Vegetation sprite textures (RGBA with alpha cutout): Wildflower, Bush, Fern, Grass Tuft
+- Farmhouse heightmap (385x385 grayscale)
 - Outputs: Diffuse, normal, and roughness maps
+- Texture tab uses a "Generate" button (not live preview)
 
 ## Project Structure
 
 ```
-├── app.py                 # Dynamic Gradio UI builder (~200 lines)
+├── app.py                 # Dynamic Gradio UI builder
 ├── app_utils.py           # save_mesh, parse_color, create_grid_and_axes
 ├── run.bat                # Easy launcher script
 ├── asset_generator.py     # Legacy CLI (still works)
 ├── core/
 │   ├── registry.py       # Generator registry system
-│   ├── mesh.py           # Mesh utilities, export
-│   ├── noise.py          # Perlin/fractal noise
+│   ├── mesh.py           # MeshBuilder, export, UVs, LOD
+│   ├── noise.py          # Perlin noise (scalar + vectorized), fractal noise
 │   └── presets.py        # Save/load presets (not yet in UI)
 ├── generators/
 │   ├── __init__.py       # Imports all modules to trigger registration
-│   ├── rocks.py          # Rocks, boulders, pebbles + register() calls
-│   ├── trees.py          # Trees, bushes, stumps + register() calls
-│   ├── buildings.py      # Buildings, walls, fences, towers + register() calls
-│   ├── terrain.py        # Terrain, islands, plateaus + register() calls
-│   └── props.py          # Props (crystals, barrels, lamps, etc.) + register() calls
+│   ├── rocks.py          # Rocks, boulders, pebbles
+│   ├── trees.py          # Trees, bushes, stumps
+│   ├── buildings.py      # Buildings, walls, fences, towers, outhouse, Danish farmhouse
+│   ├── terrain.py        # Terrain, islands, plateaus
+│   ├── props.py          # Props (crystals, barrels, lamps, stove, fireplace, etc.)
+│   ├── furniture.py      # Tables, chairs, beds, wardrobes, clocks, etc.
+│   ├── instruments.py    # Violin, trumpet
+│   └── childhood_home.py # Childhood home (special building)
 ├── textures/
-│   ├── generator.py      # Diffuse, normal, roughness maps
-│   └── export.py         # PNG/TGA export
+│   ├── generator.py      # Diffuse, normal, roughness maps + vegetation sprites
+│   └── export.py         # PNG/TGA export (handles RGBA for sprites)
 ├── presets/               # Saved preset JSON files
 └── output/                # Generated assets
 ```
@@ -125,18 +139,48 @@ register(
 | `str` | Dropdown | `Param("name", "Label", "str", default="A", choices=["A", "B"])` |
 | `color` | ColorPicker | `Param("name", "Label", "color", default="#FF0000")` |
 | `range` | Two Sliders | `Param("name", "Label", "range", range_default=(0.3, 1.0), range_min=0.1, range_max=2.0)` |
+| `image` | Image Upload | `Param("name", "Label", "image")` |
 
 Every tab automatically gets: rotation sliders, grid toggle, seed input, 3D preview, and download file.
 
+### Color pipeline
+
+`ColorPicker` sends hex strings (e.g. `"#FF6496"`) → `app_utils.parse_color()` converts to `(R, G, B)` tuple → generator receives the tuple. Also handles `rgb(R, G, B)` format. Falls back to `(128, 128, 128)` on parse failure.
+
 ## Code Conventions
 
-- All generators accept optional `seed` parameter
-- Use `set_seed(seed)` at function start
+- `set_seed(seed)` and `apply_color_variation(mesh, rgba, variation)` are defined locally in each generator module (not imported from a shared location)
+- All generators accept optional `seed` parameter; call `set_seed(seed)` at function start
 - Return `trimesh.Trimesh` objects with vertex colors
-- Generators use Z-up internally, converted to Y-up on export
+- Generators use Z-up internally, converted to Y-up on export by `save_mesh()`
 - Use `trimesh.util.concatenate()` to combine meshes
 - Call `mesh.fix_normals()` after vertex manipulation
-- Use `apply_color_variation(mesh, rgba, variation)` for natural color variation
+
+## Available Utilities
+
+### `core/mesh.py`
+- `MeshBuilder` — Programmatic mesh building: `add_vertex()`, `add_face()`, `add_quad()`, `build()`
+- `combine_meshes(meshes)` — Wrapper around `trimesh.util.concatenate()`
+- `apply_vertex_colors(mesh, rgba)` — Solid color to all vertices
+- `unweld_mesh(mesh)` — Duplicate vertices so each triangle owns its 3 verts (needed for triplanar UVs)
+- `compute_triplanar_uvs(mesh, scale)` — World-space UVs based on face normal dominant axis
+- `center_mesh(mesh, center_z=False)` — Center at origin, optionally keep bottom at Z=0
+- `generate_lod(mesh, target_faces)` — Simplify mesh (uses trimesh quadric decimation if available)
+
+### `generators/buildings.py` — Reusable helpers
+- `_wobble_box(extents, wobble=0.015)` — Box with random vertex displacement for handcrafted look
+- `_wobble_cylinder(radius, height, sections=8, wobble=0.015)` — Same for cylinders
+- `_build_wall_with_opening(wall_w, wall_h, wall_t, open_cx, open_sill_z, open_w, open_h, outer_color, inner_color)` — Dual-layer wall with rectangular opening (window or door)
+- `_build_arched_window(win_w, win_h, arch_rise, sill_z, wall_t, frame_color, sill_color)` — Window frame with arch top
+- `_build_door_frame(door_w, door_h, wall_t, frame_color)` — Door frame for partition walls (run along Y)
+- `_build_front_door_frame(door_w, door_h, wall_t, frame_color)` — Door frame for front/back walls (run along X)
+- `_build_plank_surface(width, depth, z, plank_w, axis, color)` — Flat surface of planks at given height
+- `_build_farmhouse_chimney(base_w, base_d, height, color)` — Stacked wobble boxes with taper + crown
+
+### `textures/generator.py` — Sprite helpers
+- `_paint_ellipse(canvas, cx, cy, rx, ry, angle, color)` — Rotated filled ellipse on RGBA canvas
+- `_paint_stem(canvas, x0, y0, x1, y1, thickness, color)` — Thick line segment
+- `_generate_vegetation_sprite(width, height, seed, paint_fn, name)` — Orchestrator: creates transparent RGBA canvas, calls paint_fn, generates normal/roughness from alpha
 
 ## Performance
 
