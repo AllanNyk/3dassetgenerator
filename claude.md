@@ -138,11 +138,20 @@ Every tab automatically gets: rotation sliders, grid toggle, seed input, 3D prev
 - Call `mesh.fix_normals()` after vertex manipulation
 - Use `apply_color_variation(mesh, rgba, variation)` for natural color variation
 
+## Performance
+
+Texture generation was optimized from ~60s to ~0.6s via two changes:
+
+- **Noise vectorization** (`core/noise.py`): `noise_2d_grid()` uses `PerlinNoise.noise_2d()` — a fully vectorized NumPy implementation that operates on entire coordinate arrays instead of triple-nested Python loops. The 2D case exploits z=0 → `fade(0)=0`, collapsing the outer lerp so only 4 gradient evaluations are needed per point instead of 8. **130x speedup**.
+- **Convolution** (`textures/generator.py`): Thatch streak effect uses `scipy.ndimage.uniform_filter1d()` instead of `np.apply_along_axis(lambda: np.convolve(...))`. The old approach was a hidden Python loop over rows; `uniform_filter1d` runs entirely in C. **8x speedup**.
+
+When adding new noise-based features, prefer `PerlinNoise.noise_2d()` for grid operations over the scalar `noise()` method.
+
 ## Dependencies
 
 - **numpy** - Math operations
 - **trimesh** - 3D mesh creation and export
-- **scipy** - Required by trimesh
+- **scipy** - Required by trimesh; also used for `uniform_filter1d` in texture generation
 - **gradio** - Web UI with 3D preview
 - **Pillow** - Texture image export
 
