@@ -25,6 +25,7 @@ import generators.childhood_home
 # Texture imports (texture tab stays hardcoded - different UI pattern)
 from textures.generator import (generate_texture_set, stone_texture, wood_texture, grass_texture,
                                 thatch_texture, white_stone_texture, dark_thatch_texture,
+                                brick_texture, bark_texture,
                                 wildflower_sprite, bush_sprite, fern_sprite, grass_tuft_sprite,
                                 farmhouse_heightmap)
 from textures.export import save_texture_set
@@ -122,18 +123,36 @@ def build_tab(info):
                     rot_z = gr.Slider(-180, 180, value=0, step=5, label="Z")
                 show_grid = gr.Checkbox(label="Show Grid & Axes", value=False)
                 seed = gr.Number(label="Seed", precision=0)
+                gen_btn = gr.Button("Generate", variant="primary")
             with gr.Column(scale=2):
                 preview = gr.Model3D(label="Preview")
                 download = gr.File(label="Download (clean, no grid)")
 
+        generated = gr.State(value=False)
         all_inputs = param_inputs + [rot_x, rot_y, rot_z, show_grid, seed]
         outputs = [preview, download]
         callback = make_wrapper(info)
 
+        def guarded_callback(*args):
+            state = args[-1]
+            if not state:
+                return None, None
+            return callback(*args[:-1])
+
+        def generate_callback(*args):
+            result = callback(*args)
+            return *result, True
+
+        gen_btn.click(
+            fn=generate_callback,
+            inputs=all_inputs,
+            outputs=outputs + [generated],
+        )
+
         gr.on(
             triggers=[inp.change for inp in all_inputs],
-            fn=callback,
-            inputs=all_inputs,
+            fn=guarded_callback,
+            inputs=all_inputs + [generated],
             outputs=outputs,
             trigger_mode="always_last",
         )
@@ -167,6 +186,10 @@ def ui_generate_texture(tex_type, size, seed):
         tex = thatch_texture(size, size, seed)
     elif tex_type == "Dark Thatch":
         tex = dark_thatch_texture(size, size, seed)
+    elif tex_type == "Brick":
+        tex = brick_texture(size, size, seed)
+    elif tex_type == "Bark":
+        tex = bark_texture(size, size, seed)
     elif tex_type == "Wildflower Sprite":
         tex = wildflower_sprite(size, size, seed)
     elif tex_type == "Bush Sprite":
@@ -209,6 +232,7 @@ def create_app():
                     with gr.Column(scale=1):
                         tex_type = gr.Dropdown(["Stone", "White Stone", "Wood", "Grass",
                                                 "Thatch", "Dark Thatch",
+                                                "Brick", "Bark",
                                                 "Wildflower Sprite", "Bush Sprite",
                                                 "Fern Sprite", "Grass Tuft Sprite",
                                                 "Farmhouse Heightmap",

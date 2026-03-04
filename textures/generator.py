@@ -661,6 +661,74 @@ def oak_leaf_sprite(width: int = 256, height: int = 256,
     return _generate_vegetation_sprite(width, height, seed, _paint, "oak_leaf")
 
 
+def pine_needle_sprite(width: int = 256, height: int = 256,
+                       seed: Optional[int] = None) -> TextureSet:
+    """Generate a pine needle cluster sprite for billboard tree canopies."""
+
+    def _paint(canvas, rng, w, h):
+        n_clusters = 12 + rng.randint(9)  # 12-20 clusters
+        for _ in range(n_clusters):
+            cx = w * (0.10 + rng.uniform(0, 0.80))
+            cy = h * (0.10 + rng.uniform(0, 0.80))
+            n_needles = 6 + rng.randint(7)  # 6-12 needles per cluster
+            needle_len = w * (0.04 + rng.uniform(0, 0.03))
+
+            for _ in range(n_needles):
+                angle = rng.uniform(0, 2 * np.pi)
+                tip_x = cx + np.cos(angle) * needle_len
+                tip_y = cy + np.sin(angle) * needle_len
+                # Dark green needle color
+                r = 15 + rng.randint(26)   # 15-40
+                g = 80 + rng.randint(81)   # 80-160
+                b = 10 + rng.randint(21)   # 10-30
+                needle_color = (r, g, b, 255)
+                thickness = max(1, w * 0.006)
+                _paint_stem(canvas, cx, cy, tip_x, tip_y, thickness, needle_color)
+
+            # Small dark bud ellipse at cluster center
+            bud_r = w * 0.008 + rng.uniform(0, w * 0.004)
+            bud_color = (30 + rng.randint(20), 50 + rng.randint(30),
+                         15 + rng.randint(15), 255)
+            _paint_ellipse(canvas, cx, cy, bud_r, bud_r, 0, bud_color)
+
+    return _generate_vegetation_sprite(width, height, seed, _paint, "pine_needle")
+
+
+def apple_leaf_sprite(width: int = 256, height: int = 256,
+                      seed: Optional[int] = None) -> TextureSet:
+    """Generate an apple leaf cluster sprite for billboard tree canopies."""
+
+    def _paint(canvas, rng, w, h):
+        n_leaves = 20 + rng.randint(11)  # 20-30 leaves
+        for _ in range(n_leaves):
+            cx = w * (0.12 + rng.uniform(0, 0.76))
+            cy = h * (0.12 + rng.uniform(0, 0.76))
+            # Apple leaves: smooth ovals, rounder than oak (rx/ry ~2:1)
+            rx = w * (0.05 + rng.uniform(0, 0.04))
+            ry = rx * rng.uniform(0.4, 0.6)  # ~2:1 ratio
+            angle = rng.uniform(0, np.pi)
+            # Lighter/yellower green than oak
+            r = 30 + rng.randint(31)   # 30-60
+            g = 100 + rng.randint(81)  # 100-180
+            b = 15 + rng.randint(25)   # 15-39
+            leaf_color = (r, g, b, 255)
+            _paint_ellipse(canvas, cx, cy, rx, ry, angle, leaf_color)
+
+        # A few thin stems connecting some leaves
+        n_stems = 3 + rng.randint(3)
+        for _ in range(n_stems):
+            x0 = w * (0.3 + rng.uniform(0, 0.4))
+            y0 = h * (0.5 + rng.uniform(0, 0.3))
+            x1 = x0 + rng.uniform(-w * 0.12, w * 0.12)
+            y1 = y0 - rng.uniform(w * 0.05, w * 0.15)
+            stem_color = (50 + rng.randint(25), 90 + rng.randint(40),
+                          25 + rng.randint(15), 255)
+            thickness = max(1, w * 0.008)
+            _paint_stem(canvas, x0, y0, x1, y1, thickness, stem_color)
+
+    return _generate_vegetation_sprite(width, height, seed, _paint, "apple_leaf")
+
+
 def white_stone_texture(width: int = 512, height: int = 512, seed: Optional[int] = None) -> TextureSet:
     """Generate a white/cream stone texture set."""
     return generate_texture_set(
@@ -702,6 +770,95 @@ def dark_thatch_texture(width: int = 512, height: int = 512, seed: Optional[int]
     return TextureSet(
         diffuse=texture, normal=normal, roughness=roughness,
         width=width, height=height, name="dark_thatch"
+    )
+
+
+def brick_texture(width: int = 512, height: int = 512,
+                   seed: Optional[int] = None) -> TextureSet:
+    """Generate a running-bond brick texture set."""
+    tile_h = max(4, height // 12)
+    tile_w = max(8, width // 6)
+
+    yy, xx = np.mgrid[0:height, 0:width]
+    row = yy // tile_h
+    offset = np.where(row % 2 == 1, tile_w // 2, 0)
+    tile_col = (xx + offset) // tile_w
+
+    # Per-brick color variation via integer hash
+    tile_id = (row * 997 + tile_col).astype(np.int64)
+    h1 = ((tile_id * 2654435761) % (2**31)).astype(np.float32) / (2**31)
+    h2 = ((tile_id * 2246822507 + 12345) % (2**31)).astype(np.float32) / (2**31)
+    h3 = ((tile_id * 3266489917 + 67890) % (2**31)).astype(np.float32) / (2**31)
+
+    base = np.array([165, 70, 50], dtype=np.float32)
+    diffuse = np.zeros((height, width, 3), dtype=np.float32)
+    diffuse[:, :, 0] = base[0] + (h1 * 30 - 15)
+    diffuse[:, :, 1] = base[1] + (h2 * 20 - 10)
+    diffuse[:, :, 2] = base[2] + (h3 * 16 - 8)
+
+    # Noise overlay for grit/weathering
+    noise = noise_2d_grid(width, height, scale=8.0, octaves=2, seed=seed)
+    for i in range(3):
+        diffuse[:, :, i] += noise * 10
+
+    # Mortar joints: darken brick edges, blend in lighter mortar color
+    row_pos = (yy % tile_h).astype(np.float32) / tile_h
+    col_pos = ((xx + offset) % tile_w).astype(np.float32) / tile_w
+    edge = ((row_pos < 0.08) | (row_pos > 0.92) |
+            (col_pos < 0.04) | (col_pos > 0.96)).astype(np.float32)
+    mortar_color = np.array([180, 175, 165], dtype=np.float32)
+    for i in range(3):
+        diffuse[:, :, i] = diffuse[:, :, i] * (1.0 - edge) + mortar_color[i] * edge
+
+    diffuse = np.clip(diffuse, 0, 255).astype(np.uint8)
+
+    # Height map: flat brick face with recessed mortar grooves
+    height_map = np.ones((height, width), dtype=np.float32) * 0.6
+    height_map[edge > 0] = 0.2
+    height_map += noise * 0.1
+
+    normal = generate_normal(height_map, strength=1.5)
+    roughness_base = np.full((height, width), 190, dtype=np.float32)
+    roughness_base[edge > 0] = 210  # rougher mortar
+    roughness_base += noise * 15
+    roughness = np.clip(roughness_base, 0, 255).astype(np.uint8)
+
+    return TextureSet(diffuse=diffuse, normal=normal, roughness=roughness,
+                      width=width, height=height, name="brick")
+
+
+def bark_texture(width: int = 512, height: int = 512,
+                 seed: Optional[int] = None) -> TextureSet:
+    """Generate a tree bark texture with vertical grain."""
+    # Coarse noise for large ridges
+    coarse = noise_2d_grid(width, height, scale=3.0, octaves=3, seed=seed)
+    # Fine noise for detail
+    fine = noise_2d_grid(width, height, scale=14.0, octaves=4,
+                         seed=seed + 1 if seed else None)
+
+    # Vertical running-average on fine noise to create vertical streaks
+    kernel_h = max(1, height // 10)
+    streaked = uniform_filter1d(fine, size=kernel_h, axis=0, mode='constant', cval=0.0)
+
+    # Blend: more coarse than thatch for chunky bark ridges
+    blended = 0.5 * coarse + 0.5 * streaked
+
+    # Build diffuse from dark brown base color
+    base_color = (85, 60, 35)
+    variation = 0.30
+    texture = np.zeros((height, width, 3), dtype=np.uint8)
+    for c in range(3):
+        channel = base_color[c] + (blended - 0.5) * 2 * variation * base_color[c]
+        texture[:, :, c] = np.clip(channel, 0, 255).astype(np.uint8)
+
+    normal = generate_normal(blended, strength=2.0)
+    roughness = generate_roughness(width, height, base_roughness=0.9,
+                                   variation=0.08, noise_scale=6.0,
+                                   seed=seed + 2 if seed else None)
+
+    return TextureSet(
+        diffuse=texture, normal=normal, roughness=roughness,
+        width=width, height=height, name="bark"
     )
 
 
