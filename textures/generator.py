@@ -580,6 +580,87 @@ def grass_tuft_sprite(width: int = 512, height: int = 512,
     return _generate_vegetation_sprite(width, height, seed, _paint, "grass_tuft")
 
 
+def roof_tile_texture(width: int = 256, height: int = 256,
+                      seed: Optional[int] = None) -> TextureSet:
+    """Generate a terracotta roof tile texture set."""
+    base = np.array([178, 75, 48], dtype=np.float32)
+
+    tile_h = max(4, height // 16)
+    tile_w = max(8, width // 8)
+
+    yy, xx = np.mgrid[0:height, 0:width]
+    row = yy // tile_h
+    offset = np.where(row % 2 == 1, tile_w // 2, 0)
+    tile_col = (xx + offset) // tile_w
+
+    # Per-tile color variation via integer hash
+    tile_id = (row * 997 + tile_col).astype(np.int64)
+    h1 = ((tile_id * 2654435761) % (2**31)).astype(np.float32) / (2**31)
+    h2 = ((tile_id * 2246822507 + 12345) % (2**31)).astype(np.float32) / (2**31)
+    h3 = ((tile_id * 3266489917 + 67890) % (2**31)).astype(np.float32) / (2**31)
+
+    diffuse = np.zeros((height, width, 3), dtype=np.float32)
+    diffuse[:, :, 0] = base[0] + (h1 * 30 - 15)
+    diffuse[:, :, 1] = base[1] + (h2 * 20 - 10)
+    diffuse[:, :, 2] = base[2] + (h3 * 20 - 10)
+
+    # Noise overlay for extra grit
+    noise = noise_2d_grid(width, height, scale=8.0, octaves=2, seed=seed)
+    for i in range(3):
+        diffuse[:, :, i] += noise * 10
+
+    # Darken tile edges
+    row_pos = (yy % tile_h).astype(np.float32) / tile_h
+    col_pos = ((xx + offset) % tile_w).astype(np.float32) / tile_w
+    edge = ((row_pos < 0.08) | (row_pos > 0.92) |
+            (col_pos < 0.04) | (col_pos > 0.96)).astype(np.float32) * 0.18
+    for i in range(3):
+        diffuse[:, :, i] *= (1.0 - edge)
+
+    diffuse = np.clip(diffuse, 0, 255).astype(np.uint8)
+
+    # Height map: curved tile profile per row
+    height_map = np.sin(row_pos * np.pi) * 0.5
+
+    normal = generate_normal(height_map, strength=1.5)
+    roughness = np.clip(165 + noise * 20, 0, 255).astype(np.uint8)
+
+    return TextureSet(diffuse=diffuse, normal=normal, roughness=roughness,
+                      width=width, height=height, name="roof_tile")
+
+
+def oak_leaf_sprite(width: int = 256, height: int = 256,
+                    seed: Optional[int] = None) -> TextureSet:
+    """Generate an oak leaf cluster sprite for billboard tree canopies."""
+
+    def _paint(canvas, rng, w, h):
+        n_leaves = 15 + rng.randint(12)
+        for _ in range(n_leaves):
+            cx = w * (0.15 + rng.uniform(0, 0.7))
+            cy = h * (0.15 + rng.uniform(0, 0.7))
+            # Oak leaves: elongated with lobed shape (approximated by overlapping ellipses)
+            rx = w * (0.06 + rng.uniform(0, 0.05))
+            ry = w * (0.03 + rng.uniform(0, 0.02))
+            angle = rng.uniform(0, np.pi)
+            g = 70 + rng.randint(90)
+            leaf_color = (25 + rng.randint(30), g, 15 + rng.randint(20), 255)
+            _paint_ellipse(canvas, cx, cy, rx, ry, angle, leaf_color)
+            # Add lobe bumps along the leaf
+            for lobe in range(rng.randint(2, 5)):
+                lt = rng.uniform(-0.8, 0.8)
+                lx = cx + lt * rx * np.cos(angle)
+                ly = cy + lt * rx * np.sin(angle)
+                lobe_rx = rx * rng.uniform(0.3, 0.6)
+                lobe_ry = ry * rng.uniform(0.5, 1.0)
+                lobe_color = (leaf_color[0] + rng.randint(-8, 9),
+                              min(255, leaf_color[1] + rng.randint(-10, 11)),
+                              leaf_color[2] + rng.randint(-5, 6), 255)
+                _paint_ellipse(canvas, lx, ly, lobe_rx, lobe_ry,
+                               angle + rng.uniform(-0.4, 0.4), lobe_color)
+
+    return _generate_vegetation_sprite(width, height, seed, _paint, "oak_leaf")
+
+
 def white_stone_texture(width: int = 512, height: int = 512, seed: Optional[int] = None) -> TextureSet:
     """Generate a white/cream stone texture set."""
     return generate_texture_set(

@@ -1843,13 +1843,11 @@ def generate_firewood_stack(
     depth: float = 0.40,
     color: Tuple[int, int, int] = (110, 75, 40),
     seed: Optional[int] = None
-) -> trimesh.Trimesh:
+) -> trimesh.Scene:
     """Generate a firewood stack of many small logs stacked on top of each other."""
     set_seed(seed)
-    meshes = []
-
-    bark = (*color, 255)
-    inner_wood = (190, 165, 110, 255)
+    bark_meshes = []
+    wood_meshes = []
 
     log_r_min = 0.03
     log_r_max = 0.06
@@ -1889,11 +1887,7 @@ def generate_firewood_stack(
                     np.random.uniform(-0.04, 0.04), [0, 0, 1]))
             log.apply_translation([lx, 0, lz])
 
-            # Bark color varies per log
-            bark_var = tuple(np.clip(np.array(color) + np.random.randint(-15, 15, 3),
-                                     0, 255))
-            apply_color_variation(log, (*bark_var, 255), 0.12)
-            meshes.append(log)
+            bark_meshes.append(log)
 
             # Cross-section end caps (lighter wood color, visible at front and back)
             for cap_side in [-1, 1]:
@@ -1902,11 +1896,7 @@ def generate_firewood_stack(
                 cap.apply_transform(
                     trimesh.transformations.rotation_matrix(np.pi / 2, [1, 0, 0]))
                 cap.apply_translation([lx, cap_side * l_len / 2, lz])
-                # Show growth rings via varied inner wood color
-                ring_var = tuple(np.clip(
-                    np.array([190, 165, 110]) + np.random.randint(-15, 15, 3), 0, 255))
-                apply_color_variation(cap, (*ring_var, 255), 0.08)
-                meshes.append(cap)
+                wood_meshes.append(cap)
 
     # --- Optional: side support stakes (2 vertical posts at ends) ---
     stake_h = height + 0.10
@@ -1914,8 +1904,265 @@ def generate_firewood_stack(
     for side in [-1, 1]:
         stake = _wobble_box([stake_r * 2, stake_r * 2, stake_h], wobble=0.01)
         stake.apply_translation([side * (width / 2 + stake_r), 0, stake_h / 2])
-        apply_color_variation(stake, bark, 0.1)
-        meshes.append(stake)
+        bark_meshes.append(stake)
+
+    # Build textured Scene with PBR wood material
+    from PIL import Image
+    from trimesh.visual.material import PBRMaterial
+    from trimesh.visual import TextureVisuals
+    from core.mesh import unweld_mesh, compute_triplanar_uvs
+    from textures.generator import wood_texture
+
+    tex = wood_texture(256, 256, seed)
+    diffuse_img = Image.fromarray(tex.diffuse)
+    normal_img = Image.fromarray(tex.normal)
+
+    scene = trimesh.Scene()
+
+    for group_name, group_meshes, uv_scale in [
+        ('bark', bark_meshes, 10.0),
+        ('wood', wood_meshes, 15.0),
+    ]:
+        combined = trimesh.util.concatenate(group_meshes)
+        unwelded = unweld_mesh(combined)
+        uvs = compute_triplanar_uvs(unwelded, scale=uv_scale)
+        mat = PBRMaterial(
+            baseColorTexture=diffuse_img,
+            normalTexture=normal_img,
+            roughnessFactor=0.7,
+        )
+        unwelded.visual = TextureVisuals(uv=uvs, material=mat)
+        scene.add_geometry(unwelded, node_name=group_name)
+
+    return scene
+
+
+def generate_flower_bed(
+    width: float = 1.2,
+    depth: float = 0.6,
+    height: float = 0.25,
+    color: Tuple[int, int, int] = (120, 80, 40),
+    seed: Optional[int] = None
+) -> trimesh.Scene:
+    """Generate a rustic raised flower bed with crop rows."""
+    set_seed(seed)
+    wood_meshes = []
+    plant_meshes = []
+
+    soil_rgba = (75, 50, 28, 255)
+    plank_t = 0.035
+
+    # Wooden frame — 2 long sides (X) + 2 short sides (Y)
+    for side in [-1, 1]:
+        plank = _wobble_box([width, plank_t, height], wobble=0.012)
+        plank.apply_translation([0, side * (depth / 2 - plank_t / 2), height / 2])
+        wood_meshes.append(plank)
+
+    for side in [-1, 1]:
+        plank = _wobble_box([plank_t, depth - 2 * plank_t, height], wobble=0.012)
+        plank.apply_translation([side * (width / 2 - plank_t / 2), 0, height / 2])
+        wood_meshes.append(plank)
+
+    # Corner posts (slightly taller than frame)
+    post_s = 0.045
+    for sx in [-1, 1]:
+        for sy in [-1, 1]:
+            post = _wobble_box([post_s, post_s, height + 0.04], wobble=0.01)
+            post.apply_translation([
+                sx * (width / 2 - post_s / 2),
+                sy * (depth / 2 - post_s / 2),
+                (height + 0.04) / 2,
+            ])
+            wood_meshes.append(post)
+
+    # Soil fill
+    soil_w = width - 2 * plank_t - 0.01
+    soil_d = depth - 2 * plank_t - 0.01
+    soil_h = height * 0.75
+    soil = trimesh.creation.box(extents=[soil_w, soil_d, soil_h])
+    soil.apply_translation([0, 0, soil_h / 2])
+    apply_color_variation(soil, soil_rgba, 0.15)
+    plant_meshes.append(soil)
+
+    # Crop rows — 50% carrot tops, 50% cabbages
+    inner_w = soil_w - 0.04
+    inner_d = soil_d - 0.04
+    n_rows = max(2, int(inner_d / 0.10))
+    plants_per_row = max(3, int(inner_w / 0.07))
+
+    for row in range(n_rows):
+        row_y = -inner_d / 2 + (row + 0.5) * inner_d / n_rows
+        for p in range(plants_per_row):
+            px = -inner_w / 2 + (p + 0.5) * inner_w / plants_per_row
+            px += np.random.uniform(-0.012, 0.012)
+            py = row_y + np.random.uniform(-0.012, 0.012)
+
+            if np.random.random() < 0.5:
+                # --- Carrot top: 4-5 thin grass-like strands ---
+                n_strands = np.random.randint(4, 6)
+                for _ in range(n_strands):
+                    strand_h = np.random.uniform(0.06, 0.12)
+                    tilt_x = np.random.uniform(-0.025, 0.025)
+                    tilt_y = np.random.uniform(-0.025, 0.025)
+                    strand = trimesh.creation.cylinder(
+                        radius=0.002, height=strand_h, sections=4)
+                    # Tilt the strand outward
+                    tilt_angle = np.sqrt(tilt_x**2 + tilt_y**2) * 8
+                    if tilt_angle > 0.01:
+                        tilt_axis = np.array([-tilt_y, tilt_x, 0.0])
+                        tilt_axis /= np.linalg.norm(tilt_axis)
+                        strand.apply_transform(
+                            trimesh.transformations.rotation_matrix(
+                                tilt_angle, tilt_axis))
+                    strand.apply_translation([
+                        px + tilt_x, py + tilt_y,
+                        soil_h + strand_h / 2,
+                    ])
+                    strand_green = (40 + np.random.randint(-10, 10),
+                                    130 + np.random.randint(-20, 20),
+                                    25 + np.random.randint(-8, 8), 255)
+                    apply_color_variation(strand, strand_green, 0.12)
+                    plant_meshes.append(strand)
+            else:
+                # --- Cabbage: layered spheres ---
+                cab_r = np.random.uniform(0.018, 0.028)
+                # Core
+                core = trimesh.creation.icosphere(subdivisions=1, radius=cab_r * 0.6)
+                core.vertices[:, 2] *= 0.7
+                core.apply_translation([px, py, soil_h + cab_r * 0.4])
+                core_green = (50 + np.random.randint(-10, 10),
+                              140 + np.random.randint(-15, 15),
+                              40 + np.random.randint(-8, 8), 255)
+                apply_color_variation(core, core_green, 0.1)
+                plant_meshes.append(core)
+                # Outer leaves (3-4 slightly offset spheres)
+                for li in range(np.random.randint(3, 5)):
+                    a = li * 2 * np.pi / 4 + np.random.uniform(-0.3, 0.3)
+                    lr = cab_r * np.random.uniform(0.5, 0.7)
+                    leaf = trimesh.creation.icosphere(
+                        subdivisions=1, radius=lr)
+                    leaf.vertices[:, 2] *= 0.5
+                    off_r = cab_r * 0.4
+                    leaf.apply_translation([
+                        px + np.cos(a) * off_r,
+                        py + np.sin(a) * off_r,
+                        soil_h + cab_r * 0.25,
+                    ])
+                    leaf_green = (35 + np.random.randint(-12, 12),
+                                  120 + np.random.randint(-25, 25),
+                                  30 + np.random.randint(-10, 10), 255)
+                    apply_color_variation(leaf, leaf_green, 0.15)
+                    plant_meshes.append(leaf)
+
+    # Build textured Scene — wood texture on frame, vertex colors on plants
+    from PIL import Image
+    from trimesh.visual.material import PBRMaterial
+    from trimesh.visual import TextureVisuals
+    from core.mesh import unweld_mesh, compute_triplanar_uvs
+    from textures.generator import wood_texture
+
+    scene = trimesh.Scene()
+
+    # Plants + soil — keep vertex colors
+    plants = trimesh.util.concatenate(plant_meshes)
+    plants.fix_normals()
+    scene.add_geometry(plants, node_name='plants')
+
+    # Wood frame — apply wood texture
+    wood = trimesh.util.concatenate(wood_meshes)
+    unwelded = unweld_mesh(wood)
+    uvs = compute_triplanar_uvs(unwelded, scale=12.0)
+
+    tex = wood_texture(256, 256, seed)
+    diffuse_img = Image.fromarray(tex.diffuse)
+    normal_img = Image.fromarray(tex.normal)
+
+    mat = PBRMaterial(
+        baseColorTexture=diffuse_img,
+        normalTexture=normal_img,
+        roughnessFactor=0.7,
+    )
+    unwelded.visual = TextureVisuals(uv=uvs, material=mat)
+    scene.add_geometry(unwelded, node_name='wood')
+
+    return scene
+
+
+def generate_garden_gate(
+    width: float = 1.0,
+    height: float = 1.2,
+    color: Tuple[int, int, int] = (130, 85, 40),
+    seed: Optional[int] = None
+) -> trimesh.Trimesh:
+    """Generate a wooden garden gate with fence posts and handle."""
+    set_seed(seed)
+    meshes = []
+
+    wood_rgba = (*color, 255)
+    post_w = 0.08
+    post_d = 0.08
+    post_h = height + 0.15
+
+    # Fence posts
+    for side in [-1, 1]:
+        post = _wobble_box([post_w, post_d, post_h], wobble=0.012)
+        post.apply_translation([side * (width / 2 + post_w / 2), 0, post_h / 2])
+        apply_color_variation(post, wood_rgba, 0.10)
+        meshes.append(post)
+
+        # Post cap
+        cap = _wobble_box([post_w + 0.02, post_d + 0.02, 0.025], wobble=0.008)
+        cap.apply_translation([side * (width / 2 + post_w / 2), 0, post_h + 0.0125])
+        apply_color_variation(cap, wood_rgba, 0.08)
+        meshes.append(cap)
+
+    # Gate planks (vertical)
+    plank_t = 0.025
+    gate_w = width - 0.02
+    n_planks = max(4, round(gate_w / 0.09))
+    plank_w = gate_w / n_planks
+    gate_bottom = 0.05
+
+    for i in range(n_planks):
+        px = -gate_w / 2 + plank_w / 2 + i * plank_w
+        plank_h = height - gate_bottom + np.random.uniform(-0.015, 0.015)
+        plank = _wobble_box([plank_w - 0.005, plank_t, plank_h], wobble=0.01)
+        plank.apply_translation([px, 0, gate_bottom + plank_h / 2])
+        plank_color = tuple(np.clip(np.array(color) + np.random.randint(-12, 12, 3), 0, 255))
+        apply_color_variation(plank, (*plank_color, 255), 0.10)
+        meshes.append(plank)
+
+    # Horizontal cross braces on back
+    brace_h = 0.05
+    brace_z_lo = gate_bottom + (height - gate_bottom) * 0.25
+    brace_z_hi = gate_bottom + (height - gate_bottom) * 0.75
+    for bz in [brace_z_lo, brace_z_hi]:
+        brace = _wobble_box([gate_w, plank_t + 0.008, brace_h], wobble=0.01)
+        brace.apply_translation([0, -plank_t / 2 - 0.004, bz])
+        brace_color = tuple(np.clip(np.array(color) + np.array([-8, -6, -4]), 0, 255))
+        apply_color_variation(brace, (*brace_color, 255), 0.08)
+        meshes.append(brace)
+
+    # Diagonal Z-brace
+    diag_dz = brace_z_hi - brace_z_lo
+    diag_dx = gate_w
+    diag_len = np.sqrt(diag_dx**2 + diag_dz**2)
+    diag_angle = np.arctan2(diag_dz, diag_dx)
+    diag = _wobble_box([diag_len, plank_t + 0.005, 0.035], wobble=0.008)
+    diag.apply_transform(
+        trimesh.transformations.rotation_matrix(diag_angle, [0, 1, 0]))
+    diag.apply_translation([0, -plank_t / 2 - 0.004, (brace_z_lo + brace_z_hi) / 2])
+    brace_color = tuple(np.clip(np.array(color) + np.array([-8, -6, -4]), 0, 255))
+    apply_color_variation(diag, (*brace_color, 255), 0.08)
+    meshes.append(diag)
+
+    # Handle
+    handle = _wobble_box([0.035, 0.025, 0.07], wobble=0.006)
+    handle.apply_translation([gate_w / 2 - 0.07, -plank_t / 2 - 0.0125, height * 0.5])
+    handle_color = (max(0, color[0] - 25), max(0, color[1] - 20),
+                    max(0, color[2] - 12), 255)
+    apply_color_variation(handle, handle_color, 0.06)
+    meshes.append(handle)
 
     result = trimesh.util.concatenate(meshes)
     result.fix_normals()
@@ -2007,3 +2254,22 @@ register(
         Param("color", "Bark Color", "color", default="#6E4B28"),
     ],
 )(generate_firewood_stack)
+
+register(
+    name="flower_bed", label="Flower Bed", category="Props",
+    params=[
+        Param("width", "Width", "float", default=1.2, min=0.5, max=2.5),
+        Param("depth", "Depth", "float", default=0.6, min=0.3, max=1.2),
+        Param("height", "Height", "float", default=0.25, min=0.15, max=0.5),
+        Param("color", "Wood Color", "color", default="#785028"),
+    ],
+)(generate_flower_bed)
+
+register(
+    name="garden_gate", label="Garden Gate", category="Props",
+    params=[
+        Param("width", "Width", "float", default=1.0, min=0.6, max=1.8),
+        Param("height", "Height", "float", default=1.2, min=0.8, max=2.0),
+        Param("color", "Wood Color", "color", default="#825528"),
+    ],
+)(generate_garden_gate)

@@ -1500,6 +1500,362 @@ def generate_danish_farmhouse(
     return combined
 
 
+def generate_church(
+    size: float = 1.0,
+    wall_color: Tuple[int, int, int] = (245, 240, 230),
+    roof_color: Tuple[int, int, int] = (178, 75, 48),
+    seed: Optional[int] = None
+) -> trimesh.Scene:
+    """Generate a traditional Danish whitewashed church with stepped gables."""
+    set_seed(seed)
+    wall_meshes = []
+    roof_meshes = []
+
+    wall_rgba = (*wall_color, 255)
+    roof_rgba = (*roof_color, 255)
+    stone_rgba = (120, 115, 105, 255)
+    frame_rgba = (70, 55, 35, 255)
+
+    WALL_T = 0.45
+
+    # Layout along X: [Tower] [Nave] [Chancel]
+    TOWER_W = 4.0
+    TOWER_D = 4.0
+    TOWER_H = 12.0
+    TOWER_ROOF_H = 3.0
+
+    NAVE_L = 12.0
+    NAVE_D = 7.0
+    NAVE_H = 4.5
+    NAVE_RIDGE = 8.0
+
+    CHANCEL_L = 5.0
+    CHANCEL_D = 5.5
+    CHANCEL_H = 3.8
+    CHANCEL_RIDGE = 6.5
+
+    total_l = TOWER_W + NAVE_L + CHANCEL_L
+    x_tower_w = -total_l / 2
+    x_tower_e = x_tower_w + TOWER_W
+    x_nave_w = x_tower_e
+    x_nave_e = x_nave_w + NAVE_L
+    x_chancel_w = x_nave_e
+    x_chancel_e = x_chancel_w + CHANCEL_L
+
+    tower_cx = (x_tower_w + x_tower_e) / 2
+    nave_cx = (x_nave_w + x_nave_e) / 2
+    chancel_cx = (x_chancel_w + x_chancel_e) / 2
+
+    # ---- 1. NAVE ----
+    # Side walls
+    for side in [-1, 1]:
+        wall = _wobble_box([NAVE_L, WALL_T, NAVE_H], wobble=0.012)
+        wall.apply_translation([nave_cx, side * NAVE_D / 2, NAVE_H / 2])
+        apply_color_variation(wall, wall_rgba, 0.03)
+        wall_meshes.append(wall)
+
+    # Gable end walls + triangular gable fill
+    for end_x in [x_nave_e, x_nave_w]:
+        gable_wall = _wobble_box([WALL_T, NAVE_D, NAVE_H], wobble=0.012)
+        gable_wall.apply_translation([end_x, 0, NAVE_H / 2])
+        apply_color_variation(gable_wall, wall_rgba, 0.03)
+        wall_meshes.append(gable_wall)
+
+        gable_h = NAVE_RIDGE - NAVE_H
+        n_gable = 8
+        for gi in range(n_gable):
+            frac = gi / n_gable
+            next_frac = (gi + 1) / n_gable
+            z_bot = NAVE_H + frac * gable_h
+            course_h = gable_h / n_gable
+            avg_w = NAVE_D * (1.0 - (frac + next_frac) / 2)
+            if avg_w < 0.1:
+                continue
+            gable_block = _wobble_box([WALL_T * 0.6, avg_w, course_h], wobble=0.01)
+            gable_block.apply_translation([end_x, 0, z_bot + course_h / 2])
+            apply_color_variation(gable_block, wall_rgba, 0.03)
+            wall_meshes.append(gable_block)
+
+    # Nave roof
+    nave_gable_h = NAVE_RIDGE - NAVE_H
+    roof_pitch = np.arctan2(nave_gable_h, NAVE_D / 2)
+    roof_overhang = 0.3
+    slope_w = (NAVE_D / 2) / np.cos(roof_pitch) + roof_overhang
+    roof_length = NAVE_L + 2 * roof_overhang
+    roof_t = 0.12
+    ridge_gap = 0.06
+    slope_trimmed = slope_w - ridge_gap
+
+    for side in [+1, -1]:
+        slab = trimesh.creation.box(extents=[roof_length, slope_trimmed, roof_t])
+        rot = trimesh.transformations.rotation_matrix(-side * roof_pitch, [1, 0, 0])
+        slab.apply_transform(rot)
+        y_off = side * np.cos(roof_pitch) * (slope_trimmed / 2 + ridge_gap)
+        z_off = NAVE_RIDGE - np.sin(roof_pitch) * (slope_trimmed / 2 + ridge_gap)
+        slab.apply_translation([nave_cx, y_off, z_off])
+        roof_meshes.append(slab)
+
+    ridge = trimesh.creation.box(extents=[roof_length, 0.3, 0.08])
+    ridge.apply_translation([nave_cx, 0, NAVE_RIDGE + 0.04])
+    roof_meshes.append(ridge)
+
+    # Stepped (crow-step) gable decoration on nave ends
+    for end_x in [x_nave_e, x_nave_w]:
+        n_steps = 7
+        step_dy = NAVE_D / 2 / n_steps
+        step_dz = nave_gable_h / n_steps
+        for si in range(n_steps):
+            step_y = NAVE_D / 2 - si * step_dy
+            step_z = NAVE_H + si * step_dz
+            for side_y in [-1, 1]:
+                step = _wobble_box([0.25, step_dy * 0.9, step_dz * 0.9], wobble=0.008)
+                step.apply_translation([
+                    end_x, side_y * (step_y - step_dy / 2),
+                    step_z + step_dz / 2,
+                ])
+                apply_color_variation(step, wall_rgba, 0.03)
+                wall_meshes.append(step)
+
+    # ---- 2. CHANCEL ----
+    for side in [-1, 1]:
+        wall = _wobble_box([CHANCEL_L, WALL_T, CHANCEL_H], wobble=0.012)
+        wall.apply_translation([chancel_cx, side * CHANCEL_D / 2, CHANCEL_H / 2])
+        apply_color_variation(wall, wall_rgba, 0.03)
+        wall_meshes.append(wall)
+
+    end_wall = _wobble_box([WALL_T, CHANCEL_D, CHANCEL_H], wobble=0.012)
+    end_wall.apply_translation([x_chancel_e, 0, CHANCEL_H / 2])
+    apply_color_variation(end_wall, wall_rgba, 0.03)
+    wall_meshes.append(end_wall)
+
+    # Chancel gable on east end
+    chancel_gable_h = CHANCEL_RIDGE - CHANCEL_H
+    n_gable = 6
+    for gi in range(n_gable):
+        frac = gi / n_gable
+        next_frac = (gi + 1) / n_gable
+        course_h = chancel_gable_h / n_gable
+        z_bot = CHANCEL_H + frac * chancel_gable_h
+        avg_w = CHANCEL_D * (1.0 - (frac + next_frac) / 2)
+        if avg_w < 0.1:
+            continue
+        gable_block = _wobble_box([WALL_T * 0.6, avg_w, course_h], wobble=0.01)
+        gable_block.apply_translation([x_chancel_e, 0, z_bot + course_h / 2])
+        apply_color_variation(gable_block, wall_rgba, 0.03)
+        wall_meshes.append(gable_block)
+
+    # Chancel roof
+    chancel_pitch = np.arctan2(chancel_gable_h, CHANCEL_D / 2)
+    chancel_slope_w = (CHANCEL_D / 2) / np.cos(chancel_pitch) + 0.25
+    chancel_roof_len = CHANCEL_L + 0.3
+    chancel_slope_trimmed = chancel_slope_w - ridge_gap
+
+    for side in [+1, -1]:
+        slab = trimesh.creation.box(extents=[chancel_roof_len, chancel_slope_trimmed, roof_t])
+        rot = trimesh.transformations.rotation_matrix(-side * chancel_pitch, [1, 0, 0])
+        slab.apply_transform(rot)
+        y_off = side * np.cos(chancel_pitch) * (chancel_slope_trimmed / 2 + ridge_gap)
+        z_off = CHANCEL_RIDGE - np.sin(chancel_pitch) * (chancel_slope_trimmed / 2 + ridge_gap)
+        slab.apply_translation([chancel_cx, y_off, z_off])
+        roof_meshes.append(slab)
+
+    ch_ridge = trimesh.creation.box(extents=[chancel_roof_len, 0.25, 0.07])
+    ch_ridge.apply_translation([chancel_cx, 0, CHANCEL_RIDGE + 0.035])
+    roof_meshes.append(ch_ridge)
+
+    # ---- 3. TOWER ----
+    # Tower walls (4 sides)
+    for side in [-1, 1]:
+        wall = _wobble_box([TOWER_W, WALL_T, TOWER_H], wobble=0.012)
+        wall.apply_translation([tower_cx, side * TOWER_D / 2, TOWER_H / 2])
+        apply_color_variation(wall, wall_rgba, 0.03)
+        wall_meshes.append(wall)
+
+    wall = _wobble_box([WALL_T, TOWER_D, TOWER_H], wobble=0.012)
+    wall.apply_translation([x_tower_w, 0, TOWER_H / 2])
+    apply_color_variation(wall, wall_rgba, 0.03)
+    wall_meshes.append(wall)
+
+    wall = _wobble_box([WALL_T, TOWER_D, TOWER_H], wobble=0.012)
+    wall.apply_translation([x_tower_e, 0, TOWER_H / 2])
+    apply_color_variation(wall, wall_rgba, 0.03)
+    wall_meshes.append(wall)
+
+    # Tower pyramidal roof — manual pyramid so base matches tower walls exactly
+    hw = TOWER_W / 2 + 0.05  # slight overhang
+    hd = TOWER_D / 2 + 0.05
+    base_z = TOWER_H
+    apex_z = TOWER_H + TOWER_ROOF_H
+    pyramid_verts = np.array([
+        [tower_cx - hw, -hd, base_z],   # 0: SW
+        [tower_cx + hw, -hd, base_z],   # 1: SE
+        [tower_cx + hw,  hd, base_z],   # 2: NE
+        [tower_cx - hw,  hd, base_z],   # 3: NW
+        [tower_cx,       0,  apex_z],   # 4: apex
+    ])
+    pyramid_faces = np.array([
+        [0, 1, 4], [1, 2, 4], [2, 3, 4], [3, 0, 4],  # sides
+        [0, 3, 2], [0, 2, 1],                          # base
+    ])
+    tower_pyramid = trimesh.Trimesh(
+        vertices=pyramid_verts, faces=pyramid_faces)
+    tower_pyramid.fix_normals()
+    roof_meshes.append(tower_pyramid)
+
+    # Bell openings (dark recesses near tower top)
+    bell_z = TOWER_H - 1.5
+    bell_w = 0.8
+    bell_h = 1.2
+    for side in [-1, 1]:
+        opening = trimesh.creation.box(extents=[bell_w, WALL_T + 0.05, bell_h])
+        opening.apply_translation([tower_cx, side * TOWER_D / 2, bell_z])
+        apply_color_variation(opening, frame_rgba, 0.05)
+        wall_meshes.append(opening)
+
+    opening = trimesh.creation.box(extents=[WALL_T + 0.05, bell_w, bell_h])
+    opening.apply_translation([x_tower_w, 0, bell_z])
+    apply_color_variation(opening, frame_rgba, 0.05)
+    wall_meshes.append(opening)
+
+    # ---- 4. WINDOWS ----
+    win_w = 0.6
+    win_h = 1.5
+    win_sill_z = 1.8
+
+    # Nave windows (3 per side)
+    for i in range(3):
+        wx = x_nave_w + (i + 0.5) * NAVE_L / 3
+        for side in [-1, 1]:
+            win = trimesh.creation.box(extents=[win_w, WALL_T + 0.05, win_h])
+            win.apply_translation([wx, side * NAVE_D / 2, win_sill_z + win_h / 2])
+            apply_color_variation(win, frame_rgba, 0.05)
+            wall_meshes.append(win)
+
+    # Chancel windows (1 per side + east end)
+    for side in [-1, 1]:
+        win = trimesh.creation.box(extents=[win_w, WALL_T + 0.05, win_h])
+        win.apply_translation([chancel_cx, side * CHANCEL_D / 2, win_sill_z + win_h / 2])
+        apply_color_variation(win, frame_rgba, 0.05)
+        wall_meshes.append(win)
+
+    win = trimesh.creation.box(extents=[WALL_T + 0.05, win_w, win_h])
+    win.apply_translation([x_chancel_e, 0, win_sill_z + win_h / 2])
+    apply_color_variation(win, frame_rgba, 0.05)
+    wall_meshes.append(win)
+
+    # ---- 5. ENTRANCE DOOR ----
+    door_w = 1.2
+    door_h = 2.5
+    door_x = x_nave_w + NAVE_L * 0.25
+    door = trimesh.creation.box(extents=[door_w, WALL_T + 0.05, door_h])
+    door.apply_translation([door_x, NAVE_D / 2, door_h / 2])
+    apply_color_variation(door, frame_rgba, 0.05)
+    wall_meshes.append(door)
+
+    # Porch over entrance (two small walls + lean-to roof)
+    porch_w = door_w + 0.8
+    porch_d = 1.0
+    porch_wall_h = door_h + 0.3
+
+    for px_side in [-1, 1]:
+        pw = _wobble_box([0.25, porch_d, porch_wall_h], wobble=0.01)
+        pw.apply_translation([
+            door_x + px_side * porch_w / 2,
+            NAVE_D / 2 + porch_d / 2,
+            porch_wall_h / 2,
+        ])
+        apply_color_variation(pw, wall_rgba, 0.03)
+        wall_meshes.append(pw)
+
+    # Lean-to porch roof
+    porch_top_z = door_h + 0.8
+    porch_bot_z = door_h + 0.3
+    porch_pitch = np.arctan2(porch_top_z - porch_bot_z, porch_d)
+    porch_slope_len = np.sqrt(porch_d**2 + (porch_top_z - porch_bot_z)**2) + 0.15
+    porch_slab = trimesh.creation.box(
+        extents=[porch_w + 0.3, porch_slope_len, 0.06])
+    porch_slab.apply_transform(
+        trimesh.transformations.rotation_matrix(porch_pitch, [1, 0, 0]))
+    porch_slab.apply_translation([
+        door_x, NAVE_D / 2 + porch_d / 2,
+        (porch_top_z + porch_bot_z) / 2,
+    ])
+    roof_meshes.append(porch_slab)
+
+    # ---- 6. FOUNDATION ----
+    foundation_h = 0.3
+    for cx, fl, fd in [
+        (nave_cx, NAVE_L + 0.1, NAVE_D + 0.1),
+        (chancel_cx, CHANCEL_L + 0.1, CHANCEL_D + 0.1),
+        (tower_cx, TOWER_W + 0.1, TOWER_D + 0.1),
+    ]:
+        found = trimesh.creation.box(extents=[fl, fd, foundation_h])
+        found.apply_translation([cx, 0, -foundation_h / 2])
+        apply_color_variation(found, stone_rgba, 0.08)
+        wall_meshes.append(found)
+
+    # ---- 7. CROSS on tower ----
+    cross_h = 1.2
+    cross_w = 0.6
+    cross_t = 0.08
+    cv = trimesh.creation.box(extents=[cross_t, cross_t, cross_h])
+    cv.apply_translation([tower_cx, 0, TOWER_H + TOWER_ROOF_H + cross_h / 2])
+    apply_color_variation(cv, frame_rgba, 0.05)
+    wall_meshes.append(cv)
+
+    ch = trimesh.creation.box(extents=[cross_w, cross_t, cross_t])
+    ch.apply_translation([tower_cx, 0, TOWER_H + TOWER_ROOF_H + cross_h * 0.7])
+    apply_color_variation(ch, frame_rgba, 0.05)
+    wall_meshes.append(ch)
+
+    # ---- Build textured Scene ----
+    from PIL import Image
+    from trimesh.visual.material import PBRMaterial
+    from trimesh.visual import TextureVisuals
+    from core.mesh import unweld_mesh, compute_triplanar_uvs
+    from textures.generator import roof_tile_texture
+
+    scene = trimesh.Scene()
+
+    # Walls — keep vertex colors
+    walls = trimesh.util.concatenate(wall_meshes)
+    walls.fix_normals()
+    if size != 1.0:
+        walls.apply_scale(size)
+    scene.add_geometry(walls, node_name='walls')
+
+    # Roofs — apply tile texture
+    roofs = trimesh.util.concatenate(roof_meshes)
+    roofs.fix_normals()
+    if size != 1.0:
+        roofs.apply_scale(size)
+    unwelded = unweld_mesh(roofs)
+    uvs = compute_triplanar_uvs(unwelded, scale=3.0)
+
+    tex = roof_tile_texture(256, 256, seed)
+    diffuse_img = Image.fromarray(tex.diffuse)
+    normal_img = Image.fromarray(tex.normal)
+
+    mat = PBRMaterial(
+        baseColorTexture=diffuse_img,
+        normalTexture=normal_img,
+        roughnessFactor=0.65,
+    )
+    unwelded.visual = TextureVisuals(uv=uvs, material=mat)
+    scene.add_geometry(unwelded, node_name='roof')
+
+    return scene
+
+
+register(
+    name="church", label="Church", category="Buildings",
+    params=[
+        Param("size", "Size", "float", default=1.0, min=0.3, max=3.0),
+        Param("wall_color", "Wall Color", "color", default="#F5F0E6"),
+        Param("roof_color", "Roof Color", "color", default="#B24B30"),
+    ],
+)(generate_church)
+
 register(
     name="danish_farmhouse", label="Danish Farmhouse", category="Buildings",
     params=[

@@ -130,8 +130,13 @@ def build_tab(info):
         outputs = [preview, download]
         callback = make_wrapper(info)
 
-        for inp in all_inputs:
-            inp.change(callback, inputs=all_inputs, outputs=outputs)
+        gr.on(
+            triggers=[inp.change for inp in all_inputs],
+            fn=callback,
+            inputs=all_inputs,
+            outputs=outputs,
+            trigger_mode="always_last",
+        )
 
 
 # =============================================================================
