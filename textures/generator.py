@@ -928,32 +928,43 @@ def cobblestone_texture(width: int = 512, height: int = 512,
 
     rng = np.random.default_rng(seed)
 
-    # --- Voronoi cell setup (jittered grid) ---
+    # --- Voronoi cell setup (jittered grid, tileable) ---
     cell_size = max(8, min(width, height) // 16)
-    n_cx = width // cell_size + 2   # +2 for border padding
-    n_cy = height // cell_size + 2
+    n_cx = width // cell_size
+    n_cy = height // cell_size
 
     # Jittered cell centers with hex offset for organic layout
     jx = rng.uniform(-0.4, 0.4, (n_cy, n_cx))
     jy = rng.uniform(-0.4, 0.4, (n_cy, n_cx))
-    points = []
+    base_points = []
     for j in range(n_cy):
         hex_off = 0.5 if j % 2 else 0.0
         for i in range(n_cx):
-            px = (i + hex_off - 0.5 + jx[j, i]) * cell_size
-            py = (j - 0.5 + jy[j, i]) * cell_size
-            points.append((px, py))
-    points = np.array(points, dtype=np.float64)
+            px = (i + hex_off + 0.5 + jx[j, i]) * cell_size
+            py = (j + 0.5 + jy[j, i]) * cell_size
+            base_points.append((px, py))
+    n_base = len(base_points)
+    base_points = np.array(base_points, dtype=np.float64)
+
+    # Toroidal copies: replicate base points in 3x3 grid of tiles
+    # so KDTree finds correct nearest neighbors across edges
+    all_points = []
+    for dy in (-height, 0, height):
+        for dx in (-width, 0, width):
+            shifted = base_points + np.array([dx, dy], dtype=np.float64)
+            all_points.append(shifted)
+    all_points = np.concatenate(all_points, axis=0)
 
     # KDTree for exact nearest / second-nearest (no grid artifacts)
-    tree = KDTree(points)
+    tree = KDTree(all_points)
     yy, xx = np.mgrid[0:height, 0:width]
     pixel_coords = np.column_stack([xx.ravel(), yy.ravel()]).astype(np.float64)
     dists, indices = tree.query(pixel_coords, k=2)
 
     d1 = dists[:, 0].reshape(height, width).astype(np.float32)
     d2 = dists[:, 1].reshape(height, width).astype(np.float32)
-    cell_id = indices[:, 0].reshape(height, width)
+    # Map all toroidal copies back to the same base cell ID
+    cell_id = (indices[:, 0] % n_base).reshape(height, width)
 
     # --- Gap/mortar detection ---
     edge_factor = d2 - d1
