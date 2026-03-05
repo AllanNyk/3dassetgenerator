@@ -2273,3 +2273,690 @@ register(
         Param("color", "Wood Color", "color", default="#825528"),
     ],
 )(generate_garden_gate)
+
+
+# =============================================================================
+# FLAGPOLE — Danish flag (Dannebrog)
+# =============================================================================
+
+def generate_flagpole(
+    pole_height: float = 5.0,
+    pole_color: Tuple[int, int, int] = (136, 136, 136),
+    seed: Optional[int] = None
+) -> trimesh.Trimesh:
+    """Generate a flagpole with the Danish flag (Dannebrog) flying at the top."""
+    set_seed(seed)
+    from core.mesh import MeshBuilder
+
+    meshes = []
+
+    # --- Pole (cylinder) ---
+    pole_radius = pole_height * 0.012
+    pole = trimesh.creation.cylinder(radius=pole_radius, height=pole_height, sections=8)
+    pole.apply_translation([0, 0, pole_height / 2])
+    apply_color_variation(pole, (*pole_color, 255), 0.05)
+    meshes.append(pole)
+
+    # --- Finial ball (gold sphere at top) ---
+    finial_radius = pole_height * 0.025
+    finial = trimesh.creation.icosphere(subdivisions=1, radius=finial_radius)
+    finial.apply_translation([0, 0, pole_height])
+    apply_color_variation(finial, (200, 180, 60, 255), 0.08)
+    meshes.append(finial)
+
+    # --- Flag (subdivided grid via MeshBuilder) ---
+    flag_width = pole_height * 0.30
+    flag_height = flag_width * 28.0 / 37.0
+
+    cols = 20
+    rows = 14
+    flag_top_z = pole_height - pole_height * 0.02
+
+    # Dannebrog cross proportions (as fractions of flag dimensions)
+    # Vertical stripe: 12/37 to 14/37 of width (offset left)
+    cross_v_min = 12.0 / 37.0
+    cross_v_max = 14.0 / 37.0
+    # Horizontal stripe: 12/28 to 16/28 of height
+    cross_h_min = 12.0 / 28.0
+    cross_h_max = 16.0 / 28.0
+
+    red = (198, 12, 36)
+    white = (255, 255, 255)
+
+    mb = MeshBuilder()
+
+    # Build vertex grid
+    # Flag extends in +Y (away from pole) and -Z (hanging down)
+    # Top-left at [0, 0, flag_top_z], bottom-right at [0, flag_width, flag_top_z - flag_height]
+    wave_amplitude = flag_width * 0.04
+
+    for r in range(rows + 1):
+        for c in range(cols + 1):
+            u = c / cols  # 0..1 across width (Y direction)
+            v = r / rows  # 0..1 down height (Z direction)
+
+            y = u * flag_width
+            z = flag_top_z - v * flag_height
+
+            # Wave deformation: sine wave along Y, amplitude increases with distance from pole
+            x_offset = np.sin(u * 2 * np.pi) * wave_amplitude * u
+            x = x_offset
+
+            mb.add_vertex(x, y, z)
+
+    # Build faces (quads as two triangles)
+    for r in range(rows):
+        for c in range(cols):
+            v0 = r * (cols + 1) + c
+            v1 = v0 + 1
+            v2 = (r + 1) * (cols + 1) + c + 1
+            v3 = (r + 1) * (cols + 1) + c
+            mb.add_quad(v0, v1, v2, v3)
+            # Back face for visibility from both sides
+            mb.add_quad(v3, v2, v1, v0)
+
+    flag_mesh = mb.build()
+
+    # Apply Danish cross vertex colors
+    n_verts = len(flag_mesh.vertices)
+    colors = np.zeros((n_verts, 4), dtype=np.uint8)
+
+    for i in range(n_verts):
+        vy = flag_mesh.vertices[i, 1]
+        vz = flag_mesh.vertices[i, 2]
+
+        # Convert to flag-local UV coordinates
+        u = vy / flag_width              # 0..1 across width
+        v = (flag_top_z - vz) / flag_height  # 0..1 down height
+
+        # Check if vertex falls within cross bands
+        in_vertical = cross_v_min <= u <= cross_v_max
+        in_horizontal = cross_h_min <= v <= cross_h_max
+
+        if in_vertical or in_horizontal:
+            base = white
+        else:
+            base = red
+
+        # Add slight color variation
+        variation = np.random.uniform(-5, 5, 3).astype(int)
+        colors[i] = [
+            np.clip(base[0] + variation[0], 0, 255),
+            np.clip(base[1] + variation[1], 0, 255),
+            np.clip(base[2] + variation[2], 0, 255),
+            255,
+        ]
+
+    flag_mesh.visual.vertex_colors = colors
+    meshes.append(flag_mesh)
+
+    result = trimesh.util.concatenate(meshes)
+    result.fix_normals()
+    return result
+
+
+register(
+    name="flagpole", label="Flagpole", category="Props",
+    params=[
+        Param("pole_height", "Pole Height", "float", default=5.0, min=2.0, max=10.0),
+        Param("pole_color", "Pole Color", "color", default="#888888"),
+    ],
+)(generate_flagpole)
+
+
+def generate_flag(
+    flag_width: float = 1.5,
+    seed: Optional[int] = None
+) -> trimesh.Trimesh:
+    """Generate a Danish flag (Dannebrog) with baked texture on a single waving mesh."""
+    set_seed(seed)
+    from core.mesh import MeshBuilder
+    from PIL import Image
+
+    flag_height = flag_width * 28.0 / 37.0
+
+    cols = 20
+    rows = 14
+    flag_top_z = flag_height
+
+    mb = MeshBuilder()
+    wave_amplitude = flag_width * 0.04
+    uvs = []
+
+    for r in range(rows + 1):
+        for c in range(cols + 1):
+            u = c / cols
+            v = r / rows
+            y = u * flag_width
+            z = flag_top_z - v * flag_height
+            x_offset = np.sin(u * 2 * np.pi) * wave_amplitude * u
+            mb.add_vertex(x_offset, y, z)
+            uvs.append([u, v])
+
+    for r in range(rows):
+        for c in range(cols):
+            v0 = r * (cols + 1) + c
+            v1 = v0 + 1
+            v2 = (r + 1) * (cols + 1) + c + 1
+            v3 = (r + 1) * (cols + 1) + c
+            mb.add_quad(v0, v1, v2, v3)
+            mb.add_quad(v3, v2, v1, v0)
+
+    flag_mesh = mb.build()
+
+    # Bake Dannebrog cross into a texture (single mesh = no Z-fighting)
+    tex_w, tex_h = 148, 112  # 37*4 x 28*4 for exact pixel alignment
+    tex_data = np.full((tex_h, tex_w, 3), [198, 12, 36], dtype=np.uint8)
+    # White cross bands (Dannebrog proportions)
+    v_min = round(12 / 37 * tex_w)
+    v_max = round(14 / 37 * tex_w)
+    h_min = round(12 / 28 * tex_h)
+    h_max = round(16 / 28 * tex_h)
+    tex_data[:, v_min:v_max] = [255, 255, 255]
+    tex_data[h_min:h_max, :] = [255, 255, 255]
+    img = Image.fromarray(tex_data, 'RGB')
+
+    uv_array = np.array(uvs, dtype=np.float64)
+    material = trimesh.visual.material.PBRMaterial(
+        baseColorTexture=img,
+        metallicFactor=0.0,
+        roughnessFactor=0.8,
+        doubleSided=True,
+    )
+    flag_mesh.visual = trimesh.visual.TextureVisuals(
+        uv=uv_array,
+        material=material,
+    )
+
+    flag_mesh.fix_normals()
+    return flag_mesh
+
+
+register(
+    name="flag", label="Flag", category="Props",
+    params=[
+        Param("flag_width", "Flag Width", "float", default=1.5, min=0.5, max=4.0),
+    ],
+)(generate_flag)
+
+
+def generate_flagpole_only(
+    pole_height: float = 5.0,
+    pole_color: Tuple[int, int, int] = (136, 136, 136),
+    seed: Optional[int] = None
+) -> trimesh.Trimesh:
+    """Generate a standalone flagpole without a flag."""
+    set_seed(seed)
+    meshes = []
+
+    pole_radius = pole_height * 0.012
+    pole = trimesh.creation.cylinder(radius=pole_radius, height=pole_height, sections=8)
+    pole.apply_translation([0, 0, pole_height / 2])
+    apply_color_variation(pole, (*pole_color, 255), 0.05)
+    meshes.append(pole)
+
+    finial_radius = pole_height * 0.025
+    finial = trimesh.creation.icosphere(subdivisions=1, radius=finial_radius)
+    finial.apply_translation([0, 0, pole_height])
+    apply_color_variation(finial, (200, 180, 60, 255), 0.08)
+    meshes.append(finial)
+
+    result = trimesh.util.concatenate(meshes)
+    result.fix_normals()
+    return result
+
+
+register(
+    name="flagpole_only", label="Flagpole Only", category="Props",
+    params=[
+        Param("pole_height", "Pole Height", "float", default=5.0, min=2.0, max=10.0),
+        Param("pole_color", "Pole Color", "color", default="#888888"),
+    ],
+)(generate_flagpole_only)
+
+
+# =============================================================================
+# WOODEN BUCKET
+# =============================================================================
+
+def generate_bucket(
+    height: float = 0.35,
+    radius: float = 0.15,
+    color: Tuple[int, int, int] = (139, 101, 48),
+    seed: Optional[int] = None
+) -> trimesh.Trimesh:
+    """Generate a Danish 1870s wooden bucket with iron bands."""
+    set_seed(seed)
+    meshes = []
+
+    wood = (*color, 255)
+    iron = (55, 50, 45, 255)
+
+    sections = 16
+    height_segments = 8
+    taper = 0.82  # bottom radius as fraction of top radius
+
+    # --- Bucket body (tapered cylinder, wider at top) ---
+    vertices = []
+    faces = []
+
+    for j in range(height_segments + 1):
+        t = j / height_segments
+        z = t * height
+        # Linear taper from bottom (smaller) to top (larger)
+        r = radius * (taper + (1.0 - taper) * t)
+        for i in range(sections):
+            angle = (i / sections) * 2 * np.pi
+            x = r * np.cos(angle) + np.random.uniform(-0.002, 0.002)
+            y = r * np.sin(angle) + np.random.uniform(-0.002, 0.002)
+            vertices.append([x, y, z])
+
+    vertices = np.array(vertices)
+
+    for j in range(height_segments):
+        for i in range(sections):
+            i_next = (i + 1) % sections
+            v0 = j * sections + i
+            v1 = j * sections + i_next
+            v2 = (j + 1) * sections + i_next
+            v3 = (j + 1) * sections + i
+            # Outer faces
+            faces.append([v0, v1, v2])
+            faces.append([v0, v2, v3])
+            # Inner faces (reversed winding)
+            faces.append([v0, v2, v1])
+            faces.append([v0, v3, v2])
+
+    # Bottom cap
+    bottom_center = len(vertices)
+    vertices = np.vstack([vertices, [0, 0, 0]])
+    for i in range(sections):
+        i_next = (i + 1) % sections
+        faces.append([bottom_center, i_next, i])
+
+    faces = np.array(faces)
+    body = trimesh.Trimesh(vertices=vertices, faces=faces)
+    body.fix_normals()
+    apply_color_variation(body, wood, 0.1)
+    meshes.append(body)
+
+    # --- Stave lines (subtle vertical strips on outside) ---
+    n_staves = 10
+    for si in range(n_staves):
+        angle = (si / n_staves) * 2 * np.pi
+        mid_r = radius * (taper + (1.0 - taper) * 0.5)
+        sx = (mid_r + 0.003) * np.cos(angle)
+        sy = (mid_r + 0.003) * np.sin(angle)
+        stave = _wobble_box([0.004, 0.004, height * 0.92], wobble=0.003)
+        stave.apply_translation([sx, sy, height * 0.5])
+        darker_wood = (
+            max(0, color[0] - 25),
+            max(0, color[1] - 20),
+            max(0, color[2] - 15),
+            255,
+        )
+        apply_color_variation(stave, darker_wood, 0.08)
+        meshes.append(stave)
+
+    # --- Iron bands (thin cylinders around the outside) ---
+    band_positions = [0.18, 0.50, 0.82]  # fraction of height
+    band_thickness = 0.008
+    band_height = 0.012
+    for bp in band_positions:
+        z = bp * height
+        r_at_z = radius * (taper + (1.0 - taper) * bp)
+        band = trimesh.creation.annulus(r_min=r_at_z, r_max=r_at_z + band_thickness,
+                                        height=band_height, sections=sections)
+        band.apply_translation([0, 0, z])
+        apply_color_variation(band, iron, 0.06)
+        meshes.append(band)
+
+    result = trimesh.util.concatenate(meshes)
+    result.fix_normals()
+    return result
+
+
+register(
+    name="bucket", label="Bucket", category="Props",
+    params=[
+        Param("height", "Height", "float", default=0.35, min=0.2, max=0.6),
+        Param("radius", "Radius", "float", default=0.15, min=0.08, max=0.30),
+        Param("color", "Wood Color", "color", default="#8B6530"),
+    ],
+)(generate_bucket)
+
+
+# =============================================================================
+# BUSH WITH LARK'S NEST
+# =============================================================================
+
+def generate_bush_with_nest(
+    bush_radius: float = 0.7,
+    bush_height: float = 0.6,
+    bush_color: Tuple[int, int, int] = (40, 105, 30),
+    nest_size: float = 0.18,
+    egg_count: int = 4,
+    seed: Optional[int] = None
+) -> trimesh.Trimesh:
+    """Generate a bush with a lark's nest nestled on top."""
+    set_seed(seed)
+    from core.mesh import MeshBuilder
+    meshes = []
+
+    # ---- BUSH ----
+    # Main dome: squashed icosphere with vertex noise for organic shape
+    main = trimesh.creation.icosphere(subdivisions=2, radius=bush_radius)
+    main.vertices[:, 2] *= bush_height / bush_radius
+    # Displace vertices outward randomly for irregular silhouette
+    for i in range(len(main.vertices)):
+        main.vertices[i] += main.vertex_normals[i] * np.random.uniform(-0.04, 0.06) * bush_radius
+    main.apply_translation([0, 0, bush_height * 0.5])
+    apply_color_variation(main, (*bush_color, 255), 0.18)
+    meshes.append(main)
+
+    # Secondary leaf clusters around the main dome
+    n_clusters = 7 + np.random.randint(4)
+    for _ in range(n_clusters):
+        angle = np.random.uniform(0, 2 * np.pi)
+        elev = np.random.uniform(0.2, 0.85)
+        dist = bush_radius * np.random.uniform(0.35, 0.65)
+        cr = bush_radius * np.random.uniform(0.22, 0.38)
+
+        cluster = trimesh.creation.icosphere(subdivisions=1, radius=cr)
+        # Squash slightly
+        cluster.vertices[:, 2] *= np.random.uniform(0.6, 0.85)
+        cx = np.cos(angle) * dist
+        cy = np.sin(angle) * dist
+        cz = bush_height * elev
+        cluster.apply_translation([cx, cy, cz])
+
+        shade = (
+            bush_color[0] + np.random.randint(-18, 12),
+            bush_color[1] + np.random.randint(-20, 25),
+            bush_color[2] + np.random.randint(-12, 10),
+            255
+        )
+        apply_color_variation(cluster, shade, 0.15)
+        meshes.append(cluster)
+
+    # A few small branch stubs poking out at the base
+    for _ in range(3):
+        angle = np.random.uniform(0, 2 * np.pi)
+        br = bush_radius * 0.04
+        bl = bush_radius * np.random.uniform(0.3, 0.5)
+        branch = trimesh.creation.cylinder(radius=br, height=bl, sections=5)
+        # Tilt outward
+        tilt = trimesh.transformations.rotation_matrix(
+            np.random.uniform(0.5, 1.1), [np.sin(angle), -np.cos(angle), 0]
+        )
+        branch.apply_transform(tilt)
+        branch.apply_translation([
+            np.cos(angle) * bush_radius * 0.6,
+            np.sin(angle) * bush_radius * 0.6,
+            bush_height * np.random.uniform(0.15, 0.35)
+        ])
+        apply_color_variation(branch, (75, 50, 30, 255), 0.12)
+        meshes.append(branch)
+
+    # ---- NEST ----
+    # Sits on top of the bush dome
+    nest_z = bush_height * 0.88
+    nest_outer = nest_size
+    nest_inner = nest_size * 0.65
+    nest_depth = nest_size * 0.45
+
+    # Nest bowl: torus-like ring of small twiggy cylinders
+    twig_color_base = (110, 80, 40)
+    n_twigs = 28
+    for ring in range(3):
+        ring_r = nest_outer - ring * (nest_outer - nest_inner) / 3
+        ring_z = nest_z + ring * nest_depth * 0.15
+        for i in range(n_twigs):
+            a = 2 * np.pi * i / n_twigs + ring * 0.3
+            # Each twig is a small tilted cylinder spanning an arc
+            a2 = a + np.random.uniform(0.3, 0.7)
+            x0 = np.cos(a) * ring_r
+            y0 = np.sin(a) * ring_r
+            x1 = np.cos(a2) * ring_r * np.random.uniform(0.9, 1.1)
+            y1 = np.sin(a2) * ring_r * np.random.uniform(0.9, 1.1)
+            dx, dy = x1 - x0, y1 - y0
+            twig_len = np.sqrt(dx**2 + dy**2)
+            if twig_len < 0.001:
+                continue
+            twig_r = nest_size * np.random.uniform(0.025, 0.04)
+            twig = trimesh.creation.cylinder(radius=twig_r, height=twig_len, sections=4)
+            # Orient twig along the arc
+            mid_x = (x0 + x1) / 2
+            mid_y = (y0 + y1) / 2
+            yaw = np.arctan2(dy, dx)
+            rot = trimesh.transformations.rotation_matrix(np.pi / 2, [0, 0, 1]) @ \
+                  trimesh.transformations.rotation_matrix(np.pi / 2, [1, 0, 0])
+            twig.apply_transform(rot)
+            twig.apply_transform(
+                trimesh.transformations.rotation_matrix(yaw, [0, 0, 1])
+            )
+            twig.apply_translation([mid_x, mid_y, ring_z])
+            tc = (
+                twig_color_base[0] + np.random.randint(-15, 16),
+                twig_color_base[1] + np.random.randint(-15, 16),
+                twig_color_base[2] + np.random.randint(-10, 11),
+                255
+            )
+            apply_color_variation(twig, tc, 0.1)
+            meshes.append(twig)
+
+    # Nest floor: a small flattened disc of matted material
+    floor_disc = trimesh.creation.cylinder(radius=nest_inner * 0.9,
+                                            height=nest_size * 0.06, sections=10)
+    floor_disc.apply_translation([0, 0, nest_z - nest_depth * 0.05])
+    apply_color_variation(floor_disc, (95, 72, 38, 255), 0.12)
+    meshes.append(floor_disc)
+
+    # ---- EGGS ----
+    if egg_count > 0:
+        egg_r = nest_size * 0.11
+        for i in range(egg_count):
+            ea = 2 * np.pi * i / egg_count + np.random.uniform(-0.2, 0.2)
+            ed = nest_inner * np.random.uniform(0.2, 0.5)
+            ex = np.cos(ea) * ed
+            ey = np.sin(ea) * ed
+            ez = nest_z + egg_r * 0.3
+            egg = trimesh.creation.icosphere(subdivisions=2, radius=egg_r)
+            # Elongate slightly for egg shape
+            egg.vertices[:, 2] *= 1.25
+            egg.apply_translation([ex, ey, ez])
+            # Pale speckled brown-olive (lark egg color)
+            egg_base = (185 + np.random.randint(-10, 11),
+                        175 + np.random.randint(-10, 11),
+                        145 + np.random.randint(-10, 11), 255)
+            apply_color_variation(egg, egg_base, 0.06)
+            meshes.append(egg)
+
+    result = trimesh.util.concatenate(meshes)
+    result.fix_normals()
+    return result
+
+
+register(
+    name="bush_with_nest", label="Bush with Nest", category="Props",
+    params=[
+        Param("bush_radius", "Bush Radius", "float", default=0.7, min=0.3, max=1.5),
+        Param("bush_height", "Bush Height", "float", default=0.6, min=0.3, max=1.2),
+        Param("bush_color", "Bush Color", "color", default="#28691E"),
+        Param("nest_size", "Nest Size", "float", default=0.18, min=0.08, max=0.35),
+        Param("egg_count", "Eggs", "int", default=4, min=0, max=6, step=1),
+    ],
+)(generate_bush_with_nest)
+
+
+# =============================================================================
+# LARK'S NEST (standalone)
+# =============================================================================
+
+def generate_larks_nest(
+    nest_radius: float = 0.12,
+    egg_count: int = 4,
+    seed: Optional[int] = None
+) -> trimesh.Trimesh:
+    """Generate a standalone lark's nest with woven twig walls and eggs."""
+    set_seed(seed)
+    meshes = []
+
+    wall_height = nest_radius * 0.55
+    floor_z = 0.0
+
+    # ---- Woven twig walls ----
+    # Multiple rings at increasing height, radius shrinks toward bottom (bowl shape)
+    twig_color_base = (110, 80, 40)
+    n_rings = 6
+    twigs_per_ring = 24
+
+    for ring in range(n_rings):
+        t = ring / (n_rings - 1)  # 0 = bottom, 1 = top rim
+        # Bowl profile: smaller at bottom, wider at top
+        ring_r = nest_radius * (0.5 + 0.5 * t)
+        ring_z = floor_z + t * wall_height
+
+        for i in range(twigs_per_ring):
+            a = 2 * np.pi * i / twigs_per_ring + ring * 0.4
+            arc_span = np.random.uniform(0.35, 0.75)
+            a2 = a + arc_span
+            # Slight radius wobble per twig
+            r_wobble = ring_r * np.random.uniform(0.92, 1.08)
+            x0 = np.cos(a) * r_wobble
+            y0 = np.sin(a) * r_wobble
+            x1 = np.cos(a2) * ring_r * np.random.uniform(0.93, 1.07)
+            y1 = np.sin(a2) * ring_r * np.random.uniform(0.93, 1.07)
+            dx, dy = x1 - x0, y1 - y0
+            twig_len = np.sqrt(dx**2 + dy**2)
+            if twig_len < 0.001:
+                continue
+            twig_r = nest_radius * np.random.uniform(0.022, 0.038)
+            twig = trimesh.creation.cylinder(radius=twig_r, height=twig_len, sections=4)
+            mid_x = (x0 + x1) / 2
+            mid_y = (y0 + y1) / 2
+            yaw = np.arctan2(dy, dx)
+            rot = trimesh.transformations.rotation_matrix(np.pi / 2, [0, 0, 1]) @ \
+                  trimesh.transformations.rotation_matrix(np.pi / 2, [1, 0, 0])
+            twig.apply_transform(rot)
+            twig.apply_transform(
+                trimesh.transformations.rotation_matrix(yaw, [0, 0, 1])
+            )
+            # Slight z wobble for organic feel
+            z_wobble = np.random.uniform(-wall_height * 0.04, wall_height * 0.04)
+            twig.apply_translation([mid_x, mid_y, ring_z + z_wobble])
+            tc = (
+                twig_color_base[0] + np.random.randint(-18, 19),
+                twig_color_base[1] + np.random.randint(-18, 19),
+                twig_color_base[2] + np.random.randint(-12, 13),
+                255
+            )
+            apply_color_variation(twig, tc, 0.1)
+            meshes.append(twig)
+
+    # ---- Diagonal weave twigs (crossing between rings) ----
+    n_diagonals = 14
+    for _ in range(n_diagonals):
+        a = np.random.uniform(0, 2 * np.pi)
+        z0 = floor_z + np.random.uniform(0, wall_height * 0.3)
+        z1 = z0 + wall_height * np.random.uniform(0.4, 0.7)
+        r0 = nest_radius * (0.5 + 0.5 * (z0 - floor_z) / wall_height)
+        r1 = nest_radius * (0.5 + 0.5 * (z1 - floor_z) / wall_height)
+        a_shift = np.random.uniform(0.3, 0.8)
+        x0 = np.cos(a) * r0
+        y0 = np.sin(a) * r0
+        x1 = np.cos(a + a_shift) * r1
+        y1 = np.sin(a + a_shift) * r1
+        dx, dy, dz = x1 - x0, y1 - y0, z1 - z0
+        length = np.sqrt(dx**2 + dy**2 + dz**2)
+        if length < 0.001:
+            continue
+        twig_r = nest_radius * np.random.uniform(0.018, 0.03)
+        twig = trimesh.creation.cylinder(radius=twig_r, height=length, sections=4)
+        # Orient along the diagonal
+        direction = np.array([dx, dy, dz]) / length
+        up = np.array([0, 0, 1])
+        axis = np.cross(up, direction)
+        axis_len = np.linalg.norm(axis)
+        if axis_len > 1e-6:
+            axis /= axis_len
+            angle = np.arccos(np.clip(np.dot(up, direction), -1, 1))
+            twig.apply_transform(
+                trimesh.transformations.rotation_matrix(angle, axis)
+            )
+        twig.apply_translation([(x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2])
+        tc = (
+            twig_color_base[0] + np.random.randint(-12, 13),
+            twig_color_base[1] + np.random.randint(-12, 13),
+            twig_color_base[2] + np.random.randint(-8, 9),
+            255
+        )
+        apply_color_variation(twig, tc, 0.08)
+        meshes.append(twig)
+
+    # ---- Loose twigs sticking out from the rim ----
+    n_loose = 6
+    for _ in range(n_loose):
+        a = np.random.uniform(0, 2 * np.pi)
+        stick_len = nest_radius * np.random.uniform(0.3, 0.6)
+        twig_r = nest_radius * np.random.uniform(0.015, 0.025)
+        twig = trimesh.creation.cylinder(radius=twig_r, height=stick_len, sections=4)
+        # Tilt outward and slightly up from the rim
+        tilt_angle = np.random.uniform(0.4, 1.0)
+        tilt_axis = [np.sin(a), -np.cos(a), 0]
+        twig.apply_transform(
+            trimesh.transformations.rotation_matrix(tilt_angle, tilt_axis)
+        )
+        rim_x = np.cos(a) * nest_radius
+        rim_y = np.sin(a) * nest_radius
+        twig.apply_translation([rim_x, rim_y, floor_z + wall_height])
+        apply_color_variation(twig, (100, 72, 36, 255), 0.12)
+        meshes.append(twig)
+
+    # ---- Nest floor (concave disc) ----
+    floor_r = nest_radius * 0.5
+    floor_disc = trimesh.creation.cylinder(
+        radius=floor_r, height=nest_radius * 0.04, sections=10
+    )
+    floor_disc.apply_translation([0, 0, floor_z])
+    apply_color_variation(floor_disc, (90, 68, 35, 255), 0.1)
+    meshes.append(floor_disc)
+
+    # ---- Soft lining (slightly lighter matted layer inside) ----
+    lining_r = nest_radius * 0.45
+    lining = trimesh.creation.icosphere(subdivisions=1, radius=lining_r)
+    lining.vertices[:, 2] *= 0.15  # flatten to a thin pad
+    lining.apply_translation([0, 0, floor_z + nest_radius * 0.03])
+    apply_color_variation(lining, (140, 120, 80, 255), 0.1)
+    meshes.append(lining)
+
+    # ---- Eggs ----
+    if egg_count > 0:
+        egg_r = nest_radius * 0.1
+        for i in range(egg_count):
+            ea = 2 * np.pi * i / egg_count + np.random.uniform(-0.25, 0.25)
+            ed = lining_r * np.random.uniform(0.25, 0.6)
+            ex = np.cos(ea) * ed
+            ey = np.sin(ea) * ed
+            ez = floor_z + nest_radius * 0.06 + egg_r * 0.4
+            egg = trimesh.creation.icosphere(subdivisions=2, radius=egg_r)
+            egg.vertices[:, 2] *= 1.25
+            egg.apply_translation([ex, ey, ez])
+            egg_base = (185 + np.random.randint(-10, 11),
+                        175 + np.random.randint(-10, 11),
+                        145 + np.random.randint(-10, 11), 255)
+            apply_color_variation(egg, egg_base, 0.06)
+            meshes.append(egg)
+
+    result = trimesh.util.concatenate(meshes)
+    result.fix_normals()
+    return result
+
+
+register(
+    name="larks_nest", label="Lark's Nest", category="Props",
+    params=[
+        Param("nest_radius", "Nest Radius", "float", default=0.12, min=0.05, max=0.30),
+        Param("egg_count", "Eggs", "int", default=4, min=0, max=6, step=1),
+    ],
+)(generate_larks_nest)
