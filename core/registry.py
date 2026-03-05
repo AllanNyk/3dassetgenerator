@@ -48,6 +48,7 @@ class GeneratorInfo:
     category: str
     params: List[Param] = field(default_factory=list)
     export_name: str = ""
+    button_top: bool = False
 
 
 # Global registry - insertion order preserved
@@ -63,6 +64,7 @@ def register(
     category: str,
     params: List[Param],
     export_name: str = "",
+    button_top: bool = False,
 ):
     """Register a generator function with its UI metadata.
 
@@ -84,6 +86,7 @@ def register(
             category=category,
             params=params,
             export_name=export_name or name,
+            button_top=button_top,
         )
         return func
     return decorator

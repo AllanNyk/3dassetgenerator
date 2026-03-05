@@ -1,8 +1,9 @@
 @echo off
 cd /d "%~dp0"
-echo Starting 3D Asset Generator...
+echo Starting 3D Asset Generator (hot-reload enabled)...
 echo.
-echo Press Ctrl+C to stop the server
+echo File changes will auto-restart the server — just refresh your browser.
+echo Press Ctrl+C to stop.
 echo.
-python app.py
+gradio app.py
 pause

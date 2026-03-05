@@ -827,6 +827,60 @@ def brick_texture(width: int = 512, height: int = 512,
                       width=width, height=height, name="brick")
 
 
+def white_brick_texture(width: int = 512, height: int = 512,
+                        seed: Optional[int] = None) -> TextureSet:
+    """Generate a white/cream masonry brick texture set."""
+    tile_h = max(4, height // 12)
+    tile_w = max(8, width // 6)
+
+    yy, xx = np.mgrid[0:height, 0:width]
+    row = yy // tile_h
+    offset = np.where(row % 2 == 1, tile_w // 2, 0)
+    tile_col = (xx + offset) // tile_w
+
+    # Per-brick color variation via integer hash
+    tile_id = (row * 997 + tile_col).astype(np.int64)
+    h1 = ((tile_id * 2654435761) % (2**31)).astype(np.float32) / (2**31)
+    h2 = ((tile_id * 2246822507 + 12345) % (2**31)).astype(np.float32) / (2**31)
+    h3 = ((tile_id * 3266489917 + 67890) % (2**31)).astype(np.float32) / (2**31)
+
+    base = np.array([235, 228, 215], dtype=np.float32)
+    diffuse = np.zeros((height, width, 3), dtype=np.float32)
+    diffuse[:, :, 0] = base[0] + (h1 * 16 - 8)
+    diffuse[:, :, 1] = base[1] + (h2 * 14 - 7)
+    diffuse[:, :, 2] = base[2] + (h3 * 12 - 6)
+
+    # Noise overlay for grit/weathering
+    noise = noise_2d_grid(width, height, scale=8.0, octaves=2, seed=seed)
+    for i in range(3):
+        diffuse[:, :, i] += noise * 8
+
+    # Mortar joints
+    row_pos = (yy % tile_h).astype(np.float32) / tile_h
+    col_pos = ((xx + offset) % tile_w).astype(np.float32) / tile_w
+    edge = ((row_pos < 0.08) | (row_pos > 0.92) |
+            (col_pos < 0.04) | (col_pos > 0.96)).astype(np.float32)
+    mortar_color = np.array([200, 195, 185], dtype=np.float32)
+    for i in range(3):
+        diffuse[:, :, i] = diffuse[:, :, i] * (1.0 - edge) + mortar_color[i] * edge
+
+    diffuse = np.clip(diffuse, 0, 255).astype(np.uint8)
+
+    # Height map: flat brick face with recessed mortar grooves
+    height_map = np.ones((height, width), dtype=np.float32) * 0.6
+    height_map[edge > 0] = 0.2
+    height_map += noise * 0.1
+
+    normal = generate_normal(height_map, strength=1.2)
+    roughness_base = np.full((height, width), 180, dtype=np.float32)
+    roughness_base[edge > 0] = 200
+    roughness_base += noise * 12
+    roughness = np.clip(roughness_base, 0, 255).astype(np.uint8)
+
+    return TextureSet(diffuse=diffuse, normal=normal, roughness=roughness,
+                      width=width, height=height, name="white_brick")
+
+
 def bark_texture(width: int = 512, height: int = 512,
                  seed: Optional[int] = None) -> TextureSet:
     """Generate a tree bark texture with vertical grain."""
@@ -860,6 +914,128 @@ def bark_texture(width: int = 512, height: int = 512,
         diffuse=texture, normal=normal, roughness=roughness,
         width=width, height=height, name="bark"
     )
+
+
+def cobblestone_texture(width: int = 512, height: int = 512,
+                        seed: Optional[int] = None) -> TextureSet:
+    """Generate an organic cobblestone pavement texture set.
+
+    Uses jittered Voronoi cells for irregular stone placement with
+    per-stone color variation, domed height profiles, and variable-width
+    mortar gaps.
+    """
+    from scipy.spatial import KDTree
+
+    rng = np.random.default_rng(seed)
+
+    # --- Voronoi cell setup (jittered grid) ---
+    cell_size = max(8, min(width, height) // 16)
+    n_cx = width // cell_size + 2   # +2 for border padding
+    n_cy = height // cell_size + 2
+
+    # Jittered cell centers with hex offset for organic layout
+    jx = rng.uniform(-0.4, 0.4, (n_cy, n_cx))
+    jy = rng.uniform(-0.4, 0.4, (n_cy, n_cx))
+    points = []
+    for j in range(n_cy):
+        hex_off = 0.5 if j % 2 else 0.0
+        for i in range(n_cx):
+            px = (i + hex_off - 0.5 + jx[j, i]) * cell_size
+            py = (j - 0.5 + jy[j, i]) * cell_size
+            points.append((px, py))
+    points = np.array(points, dtype=np.float64)
+
+    # KDTree for exact nearest / second-nearest (no grid artifacts)
+    tree = KDTree(points)
+    yy, xx = np.mgrid[0:height, 0:width]
+    pixel_coords = np.column_stack([xx.ravel(), yy.ravel()]).astype(np.float64)
+    dists, indices = tree.query(pixel_coords, k=2)
+
+    d1 = dists[:, 0].reshape(height, width).astype(np.float32)
+    d2 = dists[:, 1].reshape(height, width).astype(np.float32)
+    cell_id = indices[:, 0].reshape(height, width)
+
+    # --- Gap/mortar detection ---
+    edge_factor = d2 - d1
+    gap_noise = noise_2d_grid(width, height, scale=6.0, octaves=2,
+                              seed=seed + 3 if seed else None)
+    gap_threshold = 1.5 + gap_noise * 1.5
+    is_gap = edge_factor < gap_threshold
+    gap_blend = np.clip(1.0 - edge_factor / (gap_threshold + 1e-6), 0, 1)
+    gap_blend = gap_blend ** 0.5  # soften transition
+
+    # --- Normalized distance within each stone (0=center, 1=edge) ---
+    stone_radius = d2 * 0.5
+    norm_dist = np.clip(d1 / (stone_radius + 1e-6), 0, 1)
+
+    # --- Per-stone hashes for color/height variation ---
+    cid64 = cell_id.astype(np.int64)
+    h1 = ((cid64 * 2654435761) % (2**31)).astype(np.float32) / (2**31)
+    h2 = ((cid64 * 2246822507 + 12345) % (2**31)).astype(np.float32) / (2**31)
+    h3 = ((cid64 * 3266489917 + 67890) % (2**31)).astype(np.float32) / (2**31)
+    h4 = ((cid64 * 1640531527 + 999983) % (2**31)).astype(np.float32) / (2**31)
+
+    # --- Diffuse map ---
+    base = np.array([140, 135, 125], dtype=np.float32)
+    diffuse = np.zeros((height, width, 3), dtype=np.float32)
+    # Per-stone brightness shift (correlated across channels for natural gray variation)
+    brightness = h1 * 30 - 15  # shared lightness shift
+    diffuse[:, :, 0] = base[0] + brightness + (h2 * 10 - 5)  # slight warm/cool
+    diffuse[:, :, 1] = base[1] + brightness + (h3 * 8 - 4)
+    diffuse[:, :, 2] = base[2] + brightness - (h2 * 6 - 3)   # inverse for warm bias
+
+    # Fine noise for surface grit
+    grit_noise = noise_2d_grid(width, height, scale=10.0, octaves=3,
+                               seed=seed)
+    for c in range(3):
+        diffuse[:, :, c] += grit_noise * 10
+
+    # Broad weathering patches (subtle)
+    broad_noise = noise_2d_grid(width, height, scale=2.0, octaves=2,
+                                seed=seed + 5 if seed else None)
+    diffuse[:, :, 0] += (broad_noise - 0.5) * 8
+    diffuse[:, :, 2] -= (broad_noise - 0.5) * 5
+
+    # Edge darkening (grime collects at stone edges)
+    edge_darken = np.clip(norm_dist ** 2 * 0.15, 0, 0.15)
+    for c in range(3):
+        diffuse[:, :, c] *= (1.0 - edge_darken)
+
+    # Mortar/gap color blend
+    mortar_color = np.array([95, 85, 70], dtype=np.float32)
+    for c in range(3):
+        diffuse[:, :, c] = diffuse[:, :, c] * (1.0 - gap_blend) + mortar_color[c] * gap_blend
+
+    diffuse = np.clip(diffuse, 0, 255).astype(np.uint8)
+
+    # --- Height map (domed stones + recessed mortar) ---
+    dome = np.cos(norm_dist * np.pi * 0.5)
+    dome = np.clip(dome, 0, 1)
+
+    # Per-stone height offset
+    stone_h_offset = h4 * 0.3 - 0.15
+    height_map = dome * 0.6 + stone_h_offset + 0.3
+    height_map = height_map * (1.0 - gap_blend) + 0.1 * gap_blend
+
+    # Fine surface bumps
+    fine_noise = noise_2d_grid(width, height, scale=16.0, octaves=2,
+                               seed=seed + 2 if seed else None)
+    height_map += fine_noise * 0.08
+    height_map = np.clip(height_map, 0, 1).astype(np.float32)
+
+    normal = generate_normal(height_map, strength=2.0)
+
+    # --- Roughness map ---
+    h5 = ((cid64 * 2996863034 + 54321) % (2**31)).astype(np.float32) / (2**31)
+    rough_base = np.full((height, width), 175, dtype=np.float32)
+    rough_base += h5 * 30 - 15              # per-stone variation
+    rough_base += norm_dist * 20            # rougher toward edges
+    rough_base = rough_base * (1.0 - gap_blend) + 220 * gap_blend  # mortar roughest
+    rough_base += fine_noise * 15
+    roughness = np.clip(rough_base, 0, 255).astype(np.uint8)
+
+    return TextureSet(diffuse=diffuse, normal=normal, roughness=roughness,
+                      width=width, height=height, name="cobblestone")
 
 
 def farmhouse_heightmap(seed: Optional[int] = None) -> np.ndarray:
