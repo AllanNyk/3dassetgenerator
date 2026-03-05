@@ -1049,6 +1049,181 @@ def cobblestone_texture(width: int = 512, height: int = 512,
                       width=width, height=height, name="cobblestone")
 
 
+def lawn_grass_texture(width: int = 512, height: int = 512,
+                       seed: Optional[int] = None) -> TextureSet:
+    """Generate a natural lawn grass texture set.
+
+    Uses multi-layer directional noise for blade-like streaks with
+    clump variation and subtle dead-patch coloring. Seamlessly tileable.
+    """
+    # --- Blade streaks (vertical directional noise) ---
+    # Fine noise for individual blade detail
+    blade_noise = noise_2d_grid(width, height, scale=14.0, octaves=4, seed=seed)
+    # Vertical streak: blur along Y axis to simulate blade direction
+    blade_kernel = max(1, height // 12)
+    streaked = uniform_filter1d(blade_noise, size=blade_kernel, axis=0,
+                                mode='wrap')
+
+    # Second blade layer at different frequency for depth
+    blade2 = noise_2d_grid(width, height, scale=20.0, octaves=3,
+                           seed=seed + 1 if seed else None)
+    streaked2 = uniform_filter1d(blade2, size=max(1, height // 18), axis=0,
+                                 mode='wrap')
+
+    # Coarse noise for clump-level variation (patches of thicker/thinner grass)
+    clump = noise_2d_grid(width, height, scale=3.0, octaves=2,
+                          seed=seed + 2 if seed else None)
+
+    # Blend layers: fine blades dominate, clump modulates
+    blended = 0.35 * streaked + 0.35 * streaked2 + 0.30 * clump
+
+    # --- Diffuse map ---
+    # Base green with warm/cool variation per clump
+    base_g = np.array([55, 120, 35], dtype=np.float32)   # healthy green
+    brown_g = np.array([95, 105, 45], dtype=np.float32)   # dried/yellow patches
+
+    # Clump noise drives green-to-brown blend
+    brown_blend = np.clip((clump - 0.55) * 3.0, 0, 1)  # patches go brownish
+
+    diffuse = np.zeros((height, width, 3), dtype=np.float32)
+    for c in range(3):
+        base_val = base_g[c] * (1.0 - brown_blend) + brown_g[c] * brown_blend
+        diffuse[:, :, c] = base_val + (blended - 0.5) * 2 * 0.25 * base_val
+
+    # Fine brightness variation for individual blade contrast
+    diffuse[:, :, 1] += (blade_noise - 0.5) * 20  # green channel extra variation
+
+    diffuse = np.clip(diffuse, 0, 255).astype(np.uint8)
+
+    # --- Height map (blade tips create subtle relief) ---
+    height_map = 0.5 * streaked + 0.3 * streaked2 + 0.2 * blade_noise
+    normal = generate_normal(height_map, strength=0.8)
+
+    # --- Roughness (grass is fairly rough/matte) ---
+    roughness = generate_roughness(width, height, base_roughness=0.85,
+                                   variation=0.08, noise_scale=6.0,
+                                   seed=seed + 3 if seed else None)
+
+    return TextureSet(diffuse=diffuse, normal=normal, roughness=roughness,
+                      width=width, height=height, name="lawn_grass")
+
+
+def gravel_texture(width: int = 512, height: int = 512,
+                   seed: Optional[int] = None) -> TextureSet:
+    """Generate a natural gravel/pebble texture set.
+
+    Uses the same tileable Voronoi approach as cobblestone but with
+    much smaller, more numerous stones and a tighter color range.
+    """
+    from scipy.spatial import KDTree
+
+    rng = np.random.default_rng(seed)
+
+    # --- Voronoi cell setup (small cells for pebbles, tileable) ---
+    cell_size = max(4, min(width, height) // 32)  # half cobblestone size
+    n_cx = width // cell_size
+    n_cy = height // cell_size
+
+    # Jittered cell centers with hex offset
+    jx = rng.uniform(-0.4, 0.4, (n_cy, n_cx))
+    jy = rng.uniform(-0.4, 0.4, (n_cy, n_cx))
+    base_points = []
+    for j in range(n_cy):
+        hex_off = 0.5 if j % 2 else 0.0
+        for i in range(n_cx):
+            px = (i + hex_off + 0.5 + jx[j, i]) * cell_size
+            py = (j + 0.5 + jy[j, i]) * cell_size
+            base_points.append((px, py))
+    n_base = len(base_points)
+    base_points = np.array(base_points, dtype=np.float64)
+
+    # Toroidal copies for seamless tiling
+    all_points = []
+    for dy in (-height, 0, height):
+        for dx in (-width, 0, width):
+            all_points.append(base_points + np.array([dx, dy], dtype=np.float64))
+    all_points = np.concatenate(all_points, axis=0)
+
+    tree = KDTree(all_points)
+    yy, xx = np.mgrid[0:height, 0:width]
+    pixel_coords = np.column_stack([xx.ravel(), yy.ravel()]).astype(np.float64)
+    dists, indices = tree.query(pixel_coords, k=2)
+
+    d1 = dists[:, 0].reshape(height, width).astype(np.float32)
+    d2 = dists[:, 1].reshape(height, width).astype(np.float32)
+    cell_id = (indices[:, 0] % n_base).reshape(height, width)
+
+    # --- Gap detection (narrower gaps than cobblestone) ---
+    edge_factor = d2 - d1
+    gap_threshold = 1.0 + 0.5 * noise_2d_grid(width, height, scale=8.0,
+                                                octaves=2,
+                                                seed=seed + 3 if seed else None)
+    gap_blend = np.clip(1.0 - edge_factor / (gap_threshold + 1e-6), 0, 1)
+    gap_blend = gap_blend ** 0.6
+
+    # Normalized distance within each pebble
+    stone_radius = d2 * 0.5
+    norm_dist = np.clip(d1 / (stone_radius + 1e-6), 0, 1)
+
+    # --- Per-pebble hashes ---
+    cid64 = cell_id.astype(np.int64)
+    h1 = ((cid64 * 2654435761) % (2**31)).astype(np.float32) / (2**31)
+    h2 = ((cid64 * 2246822507 + 12345) % (2**31)).astype(np.float32) / (2**31)
+    h3 = ((cid64 * 3266489917 + 67890) % (2**31)).astype(np.float32) / (2**31)
+    h4 = ((cid64 * 1640531527 + 999983) % (2**31)).astype(np.float32) / (2**31)
+
+    # --- Diffuse map ---
+    # Gravel is lighter and more varied than cobblestone
+    base = np.array([155, 148, 135], dtype=np.float32)
+    diffuse = np.zeros((height, width, 3), dtype=np.float32)
+    brightness = h1 * 40 - 20  # wider brightness range for variety
+    diffuse[:, :, 0] = base[0] + brightness + (h2 * 12 - 6)
+    diffuse[:, :, 1] = base[1] + brightness + (h3 * 10 - 5)
+    diffuse[:, :, 2] = base[2] + brightness - (h2 * 8 - 4)
+
+    # Surface grit
+    grit = noise_2d_grid(width, height, scale=12.0, octaves=3, seed=seed)
+    for c in range(3):
+        diffuse[:, :, c] += grit * 8
+
+    # Subtle edge darkening
+    edge_darken = np.clip(norm_dist ** 2 * 0.12, 0, 0.12)
+    for c in range(3):
+        diffuse[:, :, c] *= (1.0 - edge_darken)
+
+    # Gap fill (sandy/dirt color between pebbles)
+    gap_color = np.array([115, 105, 85], dtype=np.float32)
+    for c in range(3):
+        diffuse[:, :, c] = diffuse[:, :, c] * (1.0 - gap_blend) + gap_color[c] * gap_blend
+
+    diffuse = np.clip(diffuse, 0, 255).astype(np.uint8)
+
+    # --- Height map (gentle domes, less pronounced than cobblestone) ---
+    dome = np.cos(norm_dist * np.pi * 0.5)
+    dome = np.clip(dome, 0, 1)
+    stone_h_offset = h4 * 0.2 - 0.1  # less height variation than cobblestone
+    height_map = dome * 0.4 + stone_h_offset + 0.35
+    height_map = height_map * (1.0 - gap_blend) + 0.15 * gap_blend
+    fine = noise_2d_grid(width, height, scale=18.0, octaves=2,
+                         seed=seed + 2 if seed else None)
+    height_map += fine * 0.06
+    height_map = np.clip(height_map, 0, 1).astype(np.float32)
+
+    normal = generate_normal(height_map, strength=1.5)
+
+    # --- Roughness ---
+    h5 = ((cid64 * 2996863034 + 54321) % (2**31)).astype(np.float32) / (2**31)
+    rough_base = np.full((height, width), 185, dtype=np.float32)
+    rough_base += h5 * 25 - 12
+    rough_base += norm_dist * 15
+    rough_base = rough_base * (1.0 - gap_blend) + 210 * gap_blend
+    rough_base += fine * 10
+    roughness = np.clip(rough_base, 0, 255).astype(np.uint8)
+
+    return TextureSet(diffuse=diffuse, normal=normal, roughness=roughness,
+                      width=width, height=height, name="gravel")
+
+
 def farmhouse_heightmap(seed: Optional[int] = None) -> np.ndarray:
     """Generate a 385x385 grayscale heightmap for the Danish farmhouse terrain.
 

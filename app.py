@@ -26,7 +26,7 @@ import generators.childhood_home
 from textures.generator import (generate_texture_set, stone_texture, wood_texture, grass_texture,
                                 thatch_texture, white_stone_texture, dark_thatch_texture,
                                 brick_texture, white_brick_texture, bark_texture,
-                                cobblestone_texture,
+                                cobblestone_texture, lawn_grass_texture, gravel_texture,
                                 wildflower_sprite, bush_sprite, fern_sprite, grass_tuft_sprite,
                                 farmhouse_heightmap)
 from textures.export import save_texture_set
@@ -179,6 +179,10 @@ def ui_generate_texture(tex_type, size, seed):
         tex = bark_texture(size, size, seed)
     elif tex_type == "Cobblestone":
         tex = cobblestone_texture(size, size, seed)
+    elif tex_type == "Lawn Grass":
+        tex = lawn_grass_texture(size, size, seed)
+    elif tex_type == "Gravel":
+        tex = gravel_texture(size, size, seed)
     elif tex_type == "Wildflower Sprite":
         tex = wildflower_sprite(size, size, seed)
     elif tex_type == "Bush Sprite":
@@ -222,7 +226,7 @@ def create_app():
                         tex_type = gr.Dropdown(["Stone", "White Stone", "Wood", "Grass",
                                                 "Thatch", "Dark Thatch",
                                                 "Brick", "White Brick", "Bark",
-                                                "Cobblestone",
+                                                "Cobblestone", "Lawn Grass", "Gravel",
                                                 "Wildflower Sprite", "Bush Sprite",
                                                 "Fern Sprite", "Grass Tuft Sprite",
                                                 "Farmhouse Heightmap",

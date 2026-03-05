@@ -520,7 +520,7 @@ def _build_gable_thatch(
     return mesh
 
 
-_TEXTURE_PRESETS = ["None", "Stone", "White Stone", "Wood", "Metal", "Grass", "Dirt", "Thatch", "Dark Thatch", "Brick", "White Brick", "Bark", "Cobblestone"]
+_TEXTURE_PRESETS = ["None", "Stone", "White Stone", "Wood", "Metal", "Grass", "Dirt", "Thatch", "Dark Thatch", "Brick", "White Brick", "Bark", "Cobblestone", "Lawn Grass", "Gravel"]
 
 
 def _load_custom_texture(path):
@@ -542,7 +542,8 @@ def _load_texture(name, seed):
     from textures.generator import (
         stone_texture, wood_texture, metal_texture, grass_texture, dirt_texture,
         thatch_texture, white_stone_texture, dark_thatch_texture,
-        brick_texture, white_brick_texture, bark_texture, cobblestone_texture)
+        brick_texture, white_brick_texture, bark_texture,
+        cobblestone_texture, lawn_grass_texture, gravel_texture)
     loaders = {
         'stone': stone_texture,
         'white stone': white_stone_texture,
@@ -556,6 +557,8 @@ def _load_texture(name, seed):
         'white brick': white_brick_texture,
         'bark': bark_texture,
         'cobblestone': cobblestone_texture,
+        'lawn grass': lawn_grass_texture,
+        'gravel': gravel_texture,
     }
     return loaders[name.lower()](256, 256, seed)
 
